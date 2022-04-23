@@ -393,7 +393,7 @@ def main(training_folder, frame_edit, frames_folder, mask_rcnn_folder, frame_edi
 
         edit_im2 = imageio.imread(edit_tex2_file)[:, :, :3] / 255.0
         alpha_im2 = imageio.imread(edit_tex2_file)[:, :, 3] / 255.0
-    output_folder_final = output_folder_final = os.path.join(output_folder, '%s_%06d' % (video_name, folder_time))
+    output_folder_final = os.path.join(output_folder, '%s_%06d' % (video_name, folder_time))
 
     Path(output_folder_final).mkdir(parents=True, exist_ok=True)
 
