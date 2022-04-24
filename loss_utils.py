@@ -5,14 +5,14 @@ import torch
 def get_gradient_loss(video_frames_dx, video_frames_dy, jif_current,
                       model_F_mapping1, model_F_mapping2, model_F_atlas,
                       rgb_output_foreground, device,resx,number_of_frames,model_alpha):
+    #TODO (Lior) We left the 2D rigid loss and added 3rd coordinate
     xplus1yt_foreground = torch.cat(
         ((jif_current[0, :] + 1) / (resx / 2) - 1, jif_current[1, :] / (resx / 2) - 1,
-         jif_current[2, :] / (number_of_frames / 2.0) - 1),
+         (jif_current[2, :]) / (resx / 2) - 1, jif_current[3, :] / (number_of_frames / 2.0) - 1),
         dim=1).to(device)
-
     xyplus1t_foreground = torch.cat(
         ((jif_current[0, :]) / (resx / 2) - 1, (jif_current[1, :] + 1) / (resx / 2) - 1,
-         jif_current[2, :] / (number_of_frames / 2.0) - 1),
+         (jif_current[2, :]) / (resx / 2) - 1, jif_current[3, :] / (number_of_frames / 2.0) - 1),
         dim=1).to(device)
 
     alphaxplus1 = 0.5 * (model_alpha(xplus1yt_foreground) + 1.0)

@@ -106,7 +106,9 @@ def get_tuples(number_of_frames, video_frames):
     for f in range(number_of_frames):
         mask = (video_frames[:, :, :, f] > -1).any(dim=2)
         relis, reljs = torch.where(mask > 0.5)
-        jif_all.append(torch.stack((reljs, relis, f * torch.ones_like(reljs))))
+        # TODO (Lior) remove the 3rd coordinate
+        depth_placeholder = torch.ones_like(reljs)
+        jif_all.append(torch.stack((reljs, relis, depth_placeholder, f * torch.ones_like(reljs))))
     return torch.cat(jif_all, dim=1)
 
 # See explanation in the paper, appendix A (Second paragraph)
@@ -115,19 +117,19 @@ def pre_train_mapping(model_F_mapping, frames_num, uv_mapping_scale, resx, resy,
     optimizer_mapping = optim.Adam(model_F_mapping.parameters(), lr=0.0001)
     for i in range(pretrain_iters):
         for f in range(frames_num):
-            i_s_int = torch.randint(resy, (np.int64(10000), 1))
-            j_s_int = torch.randint(resx, (np.int64(10000), 1))
+            i_s_int = torch.randint(int(resy), (np.int64(10000), 1))
+            j_s_int = torch.randint(int(resx), (np.int64(10000), 1))
 
             i_s = i_s_int / (larger_dim / 2) - 1
             j_s = j_s_int / (larger_dim / 2) - 1
-
-            xyt = torch.cat((j_s, i_s, (f / (frames_num / 2.0) - 1) * torch.ones_like(i_s)),
+            # TODO (Lior) I added depth at the 3rd coordinate, I changed the variable name from xyt
+            xydt = torch.cat((j_s, i_s, torch.ones_like(i_s), (f / (frames_num / 2.0) - 1) * torch.ones_like(i_s)),
                             dim=1).to(device)
-            uv_temp = model_F_mapping(xyt)
+            uv_temp = model_F_mapping(xydt)
 
             model_F_mapping.zero_grad()
-
-            loss = (xyt[:, :2] * uv_mapping_scale - uv_temp).norm(dim=1).mean()
+            #TODO 
+            loss = (xydt[:, :3] * uv_mapping_scale - uv_temp).norm(dim=1).mean()
             print(f"pre-train loss: {loss.item()}")
             loss.backward()
             optimizer_mapping.step()

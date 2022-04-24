@@ -120,8 +120,8 @@ def main(config):
     save_mask_flow(optical_flows_mask, video_frames, results_folder)
 
     model_F_mapping1 = IMLP(
-        input_dim=3,
-        output_dim=2,
+        input_dim=4,
+        output_dim=3,
         hidden_dim=number_of_channels_mapping1,
         use_positional=use_positional_encoding_mapping1,
         positional_dim=number_of_positional_encoding_mapping1,
@@ -129,8 +129,8 @@ def main(config):
         skip_layers=[]).to(device)
 
     model_F_mapping2 = IMLP(
-        input_dim=3,
-        output_dim=2,
+        input_dim=4,
+        output_dim=3,
         hidden_dim=number_of_channels_mapping2,
         use_positional=use_positional_encoding_mapping2,
         positional_dim=number_of_positional_encoding_mapping2,
@@ -138,7 +138,7 @@ def main(config):
         skip_layers=[]).to(device)
 
     model_F_atlas = IMLP(
-        input_dim=2,
+        input_dim=3,
         output_dim=3,
         hidden_dim=number_of_channels_atlas,
         use_positional=True,
@@ -147,7 +147,7 @@ def main(config):
         skip_layers=[4, 7]).to(device)
 
     model_alpha = IMLP(
-        input_dim=3,
+        input_dim=4,
         output_dim=1,
         hidden_dim=number_of_channels_alpha,
         use_positional=True,
@@ -207,9 +207,10 @@ def main(config):
                                      jif_current[2, :]].squeeze(1).to(device).unsqueeze(-1)
 
         # normalize coordinates to be in [-1,1]
+        #TODO (Lior) added 3rd coordinate
         xyt_current = torch.cat(
             (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] / (larger_dim / 2) - 1,
-             jif_current[2, :] / (number_of_frames / 2.0) - 1),
+             jif_current[2, :] / (larger_dim / 2) - 1, jif_current[3, :] / (number_of_frames / 2.0) - 1),
             dim=1).to(device)  # size (batch, 3)
 
         # get the atlas UV coordinates from the two mapping networks;

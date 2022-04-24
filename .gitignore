@@ -1,0 +1,11 @@
+data/
+evaluation_outputs/
+__pycache__/
+*.zip
+*.png
+*.mp4
+*.idea
+
+.vscode/
+pretrained_models/
+results/
