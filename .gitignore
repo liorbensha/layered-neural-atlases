@@ -9,3 +9,5 @@ __pycache__/
 .vscode/
 pretrained_models/
 results/
+thirdparty/
+*.db
