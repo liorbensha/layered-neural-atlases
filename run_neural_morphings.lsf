@@ -1,0 +1,27 @@
+#BSUB -J Atlases3D                      # CHANGE JOB NAME
+#BSUB -q waic-long          			      # QUEUE TO RUN IN
+#BSUB -gpu num=1:j_exclusive=yes               # NUM OF GPUS
+#BSUB -R rusage[mem=15000]	              # MEMORY IN MB
+#BSUB -R affinity[thread*8]                   # CPU THREADS
+##BSUB -R "select[hname!=dgxws01]"
+##BSUB -R "select[hname==hgn03]"
+##BSUB -m hpe6k_hosts    #waic_dgx_hosts  
+#BSUB -oo jobs/out.%J
+#BSUB -eo jobs/err.%J
+
+
+# WORKAROUND
+if [ -f ~/.bash_profile ]; then
+  . ~/.bash_profile
+elif [ -f ~/.profile ]; then
+  . ~/.profile
+fi
+
+# ACTIVATE YOUR CONDA ENVIRONMENT
+source /etc/profile.d/modules.sh
+
+module load miniconda/4.7.12/python/3.7.0; . activate;
+
+#RUN YOUR CODE
+cd /home/projects/ronen/yakiroz/layered-neural-atlases/
+/home/projects/ronen/yakiroz/.conda/envs/neural_atlases/bin/python train.py config/config.json

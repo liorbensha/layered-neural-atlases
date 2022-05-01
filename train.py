@@ -49,7 +49,7 @@ def main(config):
     pretrain_iter_number = config["pretrain_iter_number"]
 
     # the scale of the atlas uv coordinates relative to frame's xy coordinates
-    uv_mapping_scale = config["uv_mapping_scale"]
+    uvw_mapping_scale = config["uvw_mapping_scale"]
 
     # M_\alpha's hyper parameters:
     positional_encoding_num_alpha = config["positional_encoding_num_alpha"]
@@ -57,22 +57,25 @@ def main(config):
     number_of_layers_alpha = config["number_of_layers_alpha"]
 
     # M_f's hyper parameters
-    use_positional_encoding_mapping1 = config["use_positional_encoding_mapping1"]
-    number_of_positional_encoding_mapping1 = config["number_of_positional_encoding_mapping1"]
+    use_positional_encoding_mapping1 = config[
+        "use_positional_encoding_mapping1"]
+    number_of_positional_encoding_mapping1 = config[
+        "number_of_positional_encoding_mapping1"]
     number_of_layers_mapping1 = config["number_of_layers_mapping1"]
     number_of_channels_mapping1 = config["number_of_channels_mapping1"]
 
     # M_b's hyper parameters
-    use_positional_encoding_mapping2 = config["use_positional_encoding_mapping2"]
-    number_of_positional_encoding_mapping2 = config["number_of_positional_encoding_mapping2"]
+    use_positional_encoding_mapping2 = config[
+        "use_positional_encoding_mapping2"]
+    number_of_positional_encoding_mapping2 = config[
+        "number_of_positional_encoding_mapping2"]
     number_of_layers_mapping2 = config["number_of_layers_mapping2"]
     number_of_channels_mapping2 = config["number_of_channels_mapping2"]
 
     # Atlas MLP's hyper parameters
     number_of_channels_atlas = config["number_of_channels_atlas"]
     number_of_layers_atlas = config["number_of_layers_atlas"]
-    positional_encoding_num_atlas = config[
-        "positional_encoding_num_atlas"]
+    positional_encoding_num_atlas = config["positional_encoding_num_atlas"]
 
     # bootstrapping configuration:
     alpha_bootstrapping_factor = config["alpha_bootstrapping_factor"]
@@ -93,8 +96,10 @@ def main(config):
     # for using global (in addition to the current local) rigidity loss:
     include_global_rigidity_loss = config["include_global_rigidity_loss"]
     # Finite differences parameters for the global rigidity terms:
-    global_rigidity_derivative_amount_fg = config["global_rigidity_derivative_amount_fg"]
-    global_rigidity_derivative_amount_bg = config["global_rigidity_derivative_amount_bg"]
+    global_rigidity_derivative_amount_fg = config[
+        "global_rigidity_derivative_amount_fg"]
+    global_rigidity_derivative_amount_bg = config[
+        "global_rigidity_derivative_amount_bg"]
     global_rigidity_coeff_fg = config["global_rigidity_coeff_fg"]
     global_rigidity_coeff_bg = config["global_rigidity_coeff_bg"]
     stop_global_rigidity = config["stop_global_rigidity"]
@@ -105,15 +110,15 @@ def main(config):
     vid_root = data_folder.parent
 
     results_folder = Path(
-        f'./{results_folder_name}/{vid_name}_{datetime.utcnow().strftime("%m_%d_%Y__%H_%M_%S_%f")}{add_to_experiment_folder_name}')
+        f'./{results_folder_name}/{vid_name}_{datetime.utcnow().strftime("%m_%d_%Y__%H_%M_%S_%f")}{add_to_experiment_folder_name}'
+    )
 
     results_folder.mkdir(parents=True, exist_ok=True)
     with open('%s/config.json' % results_folder, 'w') as json_file:
         json.dump(config, json_file, indent=4)
-    logging.basicConfig(
-        filename='%s/log.log' % results_folder,
-        level=logging.INFO,
-        format='%(asctime)s %(message)s')
+    logging.basicConfig(filename='%s/log.log' % results_folder,
+                        level=logging.INFO,
+                        format='%(asctime)s %(message)s')
     logging.info('Started')
     writer = SummaryWriter(log_dir=str(results_folder))
     optical_flows_mask, video_frames, optical_flows_reverse_mask, mask_frames, video_frames_dx, \
@@ -141,40 +146,57 @@ def main(config):
         num_layers=number_of_layers_mapping2,
         skip_layers=[]).to(device)
 
-    model_F_atlas = IMLP(
-        input_dim=3,
-        output_dim=3,
-        hidden_dim=number_of_channels_atlas,
-        use_positional=True,
-        positional_dim=positional_encoding_num_atlas,
-        num_layers=number_of_layers_atlas,
-        skip_layers=[4, 7]).to(device)
+    model_F_atlas = IMLP(input_dim=3,
+                         output_dim=3,
+                         hidden_dim=number_of_channels_atlas,
+                         use_positional=True,
+                         positional_dim=positional_encoding_num_atlas,
+                         num_layers=number_of_layers_atlas,
+                         skip_layers=[4, 7]).to(device)
 
-    model_alpha = IMLP(
-        input_dim=4,
-        output_dim=1,
-        hidden_dim=number_of_channels_alpha,
-        use_positional=True,
-        positional_dim=positional_encoding_num_alpha,
-        num_layers=number_of_layers_alpha,
-        skip_layers=[]).to(device)
+    model_alpha = IMLP(input_dim=4,
+                       output_dim=1,
+                       hidden_dim=number_of_channels_alpha,
+                       use_positional=True,
+                       positional_dim=positional_encoding_num_alpha,
+                       num_layers=number_of_layers_alpha,
+                       skip_layers=[]).to(device)
 
     start_iteration = 0
 
-    optimizer_all = optim.Adam(
-        [{'params': list(model_F_mapping1.parameters())},
-         {'params': list(model_F_mapping2.parameters())},
-         {'params': list(model_alpha.parameters())},
-         {'params': list(model_F_atlas.parameters())}], lr=0.0001)
+    optimizer_all = optim.Adam([{
+        'params': list(model_F_mapping1.parameters())
+    }, {
+        'params': list(model_F_mapping2.parameters())
+    }, {
+        'params': list(model_alpha.parameters())
+    }, {
+        'params': list(model_F_atlas.parameters())
+    }],
+                               lr=0.0001)
 
     larger_dim = np.maximum(resx, resy)
     if not load_checkpoint:
         if pretrain_mapping1:
-            model_F_mapping1 = pre_train_mapping(model_F_mapping1, number_of_frames, uv_mapping_scale, resx=resx, resy=resy,
-                                                 larger_dim=larger_dim, device=device, pretrain_iters=pretrain_iter_number)
+            model_F_mapping1 = pre_train_mapping(
+                model_F_mapping1,
+                number_of_frames,
+                uvw_mapping_scale,
+                resx=resx,
+                resy=resy,
+                larger_dim=larger_dim,
+                device=device,
+                pretrain_iters=pretrain_iter_number)
         if pretrain_mapping2:
-            model_F_mapping2 = pre_train_mapping(model_F_mapping2, number_of_frames, uv_mapping_scale, resx=resx, resy=resy,
-                                                 larger_dim=larger_dim, device=device, pretrain_iters=pretrain_iter_number)
+            model_F_mapping2 = pre_train_mapping(
+                model_F_mapping2,
+                number_of_frames,
+                uvw_mapping_scale,
+                resx=resx,
+                resy=resy,
+                larger_dim=larger_dim,
+                device=device,
+                pretrain_iters=pretrain_iter_number)
     else:
         init_file = torch.load(checkpoint_path)
         model_F_atlas.load_state_dict(init_file["F_atlas_state_dict"])
@@ -186,7 +208,8 @@ def main(config):
         optimizer_all.load_state_dict(init_file["optimizer_all_state_dict"])
         start_iteration = init_file["iteration"]
 
-    jif_all = get_tuples(number_of_frames, video_frames, depth_frames)
+    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames,
+                                       depth_frames)
 
     # Start training!
     for i in range(start_iteration, iters_num):
@@ -204,19 +227,21 @@ def main(config):
                                         (np.int64(samples * 1.0), 1))
 
         jif_current = jif_all[:, inds_foreground]  # size (3, batch, 1)
+        depth_at_jif_current = depth_at_jif[inds_foreground]
 
         rgb_current = video_frames[jif_current[1, :], jif_current[0, :], :,
                                    jif_current[2, :]].squeeze(1).to(device)
 
         # the correct alpha according to the precomputed maskrcnn
-        alpha_maskrcnn = mask_frames[jif_current[1, :], jif_current[0, :],
-                                     jif_current[2, :]].squeeze(1).to(device).unsqueeze(-1)
+        alpha_maskrcnn = mask_frames[jif_current[1, :], jif_current[
+            0, :], jif_current[2, :]].squeeze(1).to(device).unsqueeze(-1)
 
         # normalize coordinates to be in [-1,1]
         # TODO (Lior) added 3rd coordinate
         xydt_current = torch.cat(
-            (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] / (larger_dim / 2) - 1,
-             jif_current[2, :] / (larger_dim / 2) - 1, jif_current[3, :] / (number_of_frames / 2.0) - 1),
+            (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] /
+             (larger_dim / 2) - 1, depth_at_jif_current / (larger_dim / 2) - 1,
+             jif_current[2, :] / (number_of_frames / 2.0) - 1),
             dim=1).to(device)  # size (batch, 3)
 
         # get the atlas UV coordinates from the two mapping networks;
@@ -232,84 +257,110 @@ def main(config):
         # Sample atlas values. Foreground colors are sampled from [0,1]x[0,1] and background colors are sampled from [-1,0]x[-1,0]
         # Note that the original [u,v] coorinates are in [-1,1]x[-1,1] for both networks
         rgb_output1 = (model_F_atlas(uvw_foreground1 * 0.5 + 0.5) + 1.0) * 0.5
-        rgb_output2 = (model_F_atlas(
-            uvw_foreground2 * 0.5 - 0.5) + 1.0) * 0.5
+        rgb_output2 = (model_F_atlas(uvw_foreground2 * 0.5 - 0.5) + 1.0) * 0.5
         # Reconstruct final colors from the two layers (using alpha)
         rgb_output_foreground = rgb_output1 * \
             alpha + rgb_output2 * (1.0 - alpha)
 
         if use_gradient_loss:
-            gradient_loss = get_gradient_loss(video_frames_dx, video_frames_dy, jif_current,
-                                              model_F_mapping1, model_F_mapping2, model_F_atlas,
-                                              rgb_output_foreground, device, resx, number_of_frames, model_alpha)
+            gradient_loss = get_gradient_loss(
+                video_frames_dx, video_frames_dy, jif_current,
+                depth_at_jif_current, model_F_mapping1, model_F_mapping2,
+                model_F_atlas, rgb_output_foreground, device, resx,
+                number_of_frames, model_alpha)
         else:
             gradient_loss = 0.0
         print("gradient_loss:")
         print(gradient_loss)
         rgb_output_foreground_not = rgb_output1 * (1.0 - alpha)
 
-        rgb_loss = (torch.norm(rgb_output_foreground -
-                    rgb_current, dim=1) ** 2).mean()
+        rgb_loss = (torch.norm(rgb_output_foreground - rgb_current,
+                               dim=1)**2).mean()
 
-        rgb_loss_sparsity = (torch.norm(
-            rgb_output_foreground_not, dim=1) ** 2).mean()
+        rgb_loss_sparsity = (torch.norm(rgb_output_foreground_not,
+                                        dim=1)**2).mean()
 
-        rigidity_loss1 = get_rigidity_loss(
-            jif_current,
-            derivative_amount,
-            larger_dim,
-            number_of_frames,
-            model_F_mapping1,
-            uvw_foreground1, device,
-            uvw_mapping_scale=uv_mapping_scale)
-        rigidity_loss2 = get_rigidity_loss(
-            jif_current,
-            derivative_amount,
-            larger_dim,
-            number_of_frames,
-            model_F_mapping2,
-            uvw_foreground2, device,
-            uvw_mapping_scale=uv_mapping_scale)
+        rigidity_loss1 = get_rigidity_loss(jif_current,
+                                           depth_at_jif_current,
+                                           derivative_amount,
+                                           larger_dim,
+                                           number_of_frames,
+                                           model_F_mapping1,
+                                           uvw_foreground1,
+                                           device,
+                                           uvw_mapping_scale=uvw_mapping_scale)
+
+        rigidity_loss2 = get_rigidity_loss(jif_current,
+                                           depth_at_jif_current,
+                                           derivative_amount,
+                                           larger_dim,
+                                           number_of_frames,
+                                           model_F_mapping2,
+                                           uvw_foreground2,
+                                           device,
+                                           uvw_mapping_scale=uvw_mapping_scale)
 
         if include_global_rigidity_loss and i <= stop_global_rigidity:
             global_rigidity_loss1 = get_rigidity_loss(
                 jif_current,
+                depth_at_jif_current,
                 global_rigidity_derivative_amount_fg,
                 larger_dim,
                 number_of_frames,
                 model_F_mapping1,
-                uvw_foreground1, device,
-                uvw_mapping_scale=uv_mapping_scale)
+                uvw_foreground1,
+                device,
+                uvw_mapping_scale=uvw_mapping_scale)
             global_rigidity_loss2 = get_rigidity_loss(
                 jif_current,
+                depth_at_jif_current,
                 global_rigidity_derivative_amount_bg,
                 larger_dim,
                 number_of_frames,
                 model_F_mapping2,
-                uvw_foreground2, device,
-                uvw_mapping_scale=uv_mapping_scale)
+                uvw_foreground2,
+                device,
+                uvw_mapping_scale=uvw_mapping_scale)
 
-        flow_loss1 = get_optical_flow_loss(
-            jif_current, uvw_foreground1, optical_flows_reverse, optical_flows_reverse_mask, larger_dim,
-            number_of_frames, model_F_mapping1, optical_flows, optical_flows_mask, uv_mapping_scale, device, use_alpha=True,
-            alpha=alpha)
+        flow_loss1 = get_optical_flow_loss(jif_current,
+                                           uvw_foreground1,
+                                           optical_flows_reverse,
+                                           optical_flows_reverse_mask,
+                                           larger_dim,
+                                           number_of_frames,
+                                           model_F_mapping1,
+                                           optical_flows,
+                                           optical_flows_mask,
+                                           uvw_mapping_scale,
+                                           device,
+                                           use_alpha=True,
+                                           alpha=alpha)
 
-        flow_loss2 = get_optical_flow_loss(
-            jif_current, uvw_foreground2, optical_flows_reverse, optical_flows_reverse_mask, larger_dim,
-            number_of_frames, model_F_mapping2, optical_flows, optical_flows_mask, uv_mapping_scale, device, use_alpha=True,
-            alpha=1 - alpha)
+        flow_loss2 = get_optical_flow_loss(jif_current,
+                                           uvw_foreground2,
+                                           optical_flows_reverse,
+                                           optical_flows_reverse_mask,
+                                           larger_dim,
+                                           number_of_frames,
+                                           model_F_mapping2,
+                                           optical_flows,
+                                           optical_flows_mask,
+                                           uvw_mapping_scale,
+                                           device,
+                                           use_alpha=True,
+                                           alpha=1 - alpha)
 
-        flow_alpha_loss = get_optical_flow_alpha_loss(model_alpha,
-                                                      jif_current, alpha, optical_flows_reverse,
-                                                      optical_flows_reverse_mask, larger_dim,
-                                                      number_of_frames, optical_flows,
-                                                      optical_flows_mask, device)
+        flow_alpha_loss = get_optical_flow_alpha_loss(
+            model_alpha, jif_current, alpha, optical_flows_reverse,
+            optical_flows_reverse_mask, larger_dim, number_of_frames,
+            optical_flows, optical_flows_mask, device)
 
         print("flow alpha loss:")
         print(flow_alpha_loss)
 
         alpha_bootstrapping_loss = torch.mean(
-            -alpha_maskrcnn * torch.log(alpha) - (1 - alpha_maskrcnn) * torch.log(1 - alpha))
+            -alpha_maskrcnn * torch.log(alpha) -
+            (1 - alpha_maskrcnn) * torch.log(1 - alpha))
 
         print("alpha_balancing_loss")
         print(alpha_bootstrapping_loss)
@@ -320,8 +371,11 @@ def main(config):
                 rgb_loss * rgb_coeff + optical_flow_coeff * (
                 flow_loss1 + flow_loss2) + alpha_bootstrapping_loss * alpha_bootstrapping_factor + flow_alpha_loss * alpha_flow_factor + rgb_loss_sparsity * sparsity_coeff + gradient_loss * gradient_loss_coeff
         else:
-            loss = rigidity_coeff * (rigidity_loss1 + rigidity_loss2) + rgb_loss * rgb_coeff + optical_flow_coeff * (
-                flow_loss1 + flow_loss2) + alpha_bootstrapping_loss * alpha_bootstrapping_factor + flow_alpha_loss * alpha_flow_factor + rgb_loss_sparsity * sparsity_coeff + gradient_loss * gradient_loss_coeff
+            loss = rigidity_coeff * (
+                rigidity_loss1 + rigidity_loss2
+            ) + rgb_loss * rgb_coeff + optical_flow_coeff * (
+                flow_loss1 + flow_loss2
+            ) + alpha_bootstrapping_loss * alpha_bootstrapping_factor + flow_alpha_loss * alpha_flow_factor + rgb_loss_sparsity * sparsity_coeff + gradient_loss * gradient_loss_coeff
 
         optimizer_all.zero_grad()
         loss.backward()
@@ -368,12 +422,33 @@ def main(config):
         try:
             # render and evaluate videos every N iterations
             if i % evaluate_every == 0 and i > start_iteration:
-                evaluate_model(model_F_atlas, resx, resy, number_of_frames, model_F_mapping1,
-                               model_F_mapping2, model_alpha,
-                               video_frames, results_folder, i, mask_frames, optimizer_all,
-                               writer, vid_name, derivative_amount, uv_mapping_scale,
-                               optical_flows,
-                               optical_flows_mask, device)
+                model_F_atlas.eval()
+                model_F_mapping1.eval()
+                model_F_mapping2.eval()
+                model_alpha.eval()
+
+                torch.save(
+                    {
+                        'F_atlas_state_dict':
+                        model_F_atlas.state_dict(),
+                        'iteration':
+                        i,
+                        'model_F_mapping1_state_dict':
+                        model_F_mapping1.state_dict(),
+                        'model_F_mapping2_state_dict':
+                        model_F_mapping2.state_dict(),
+                        'model_F_alpha_state_dict':
+                        model_alpha.state_dict(),
+                        'optimizer_all_state_dict':
+                        optimizer_all.state_dict()
+                    }, '%s/checkpoint' % (results_folder))
+
+                # evaluate_model(model_F_atlas, resx, resy, number_of_frames, model_F_mapping1,
+                #                model_F_mapping2, model_alpha,
+                #                video_frames, results_folder, i, mask_frames, optimizer_all,
+                #                writer, vid_name, derivative_amount, uvw_mapping_scale,
+                #                optical_flows,
+                #                optical_flows_mask, device)
 
                 rgb_img = video_frames[:, :, :, 0].numpy()
                 writer.add_image('Input/rgb_0', rgb_img, i, dataformats='HWC')

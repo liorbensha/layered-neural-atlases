@@ -5,6 +5,7 @@ __pycache__/
 *.png
 *.mp4
 *.idea
+jobs/
 
 .vscode/
 pretrained_models/
