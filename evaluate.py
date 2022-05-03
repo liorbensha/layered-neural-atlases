@@ -14,6 +14,7 @@ import skimage.metrics
 import torch
 from PIL import Image
 from scipy.interpolate import griddata
+from tqdm import tqdm
 
 from loss_utils import (get_optical_flow_alpha_loss_all,
                         get_optical_flow_loss_all, get_rigidity_loss)
@@ -101,23 +102,24 @@ def get_colors(resolution, minx, maxx, miny, maxy, pointx, pointy, image):
 
 
 # Sample discrete atlas image from a neural atlas
-def get_high_res_texture(resolution, minx, maxx, miny, maxy, mind, maxd, model_F_atlas,
-                        device):
+def get_high_res_texture(resolution, minx, maxx, miny, maxy, mind, maxd,
+                         model_F_atlas, device):
     indsx = torch.linspace(minx, maxx, resolution)
     indsy = torch.linspace(miny, maxy, resolution)
-    indsd = torch.linspace(mind, maxd, resolution)
+    indsd = torch.linspace(mind, maxd, 1)
     reconstruction_texture2 = torch.zeros((resolution, resolution, 3))
     counter = 0
     with torch.no_grad():
 
         # reconsruct image row by row
-        for i in indsy:
+        for i in tqdm(indsy):
             for j in indsd:
-                reconstruction_texture2[counter, :, :, :] = model_F_atlas(
+                reconstruction_texture2[counter, :, :] = model_F_atlas(
                     torch.cat((indsx.unsqueeze(1),
-                            i * torch.ones_like(indsx.unsqueeze(1)), j * torch.ones_like(indsx.unsqueeze(1))),
-                            dim=1).to(device)).detach().cpu()
-                counter = counter + 1
+                               i * torch.ones_like(indsx.unsqueeze(1)),
+                               j * torch.ones_like(indsx.unsqueeze(1))),
+                              dim=1).to(device)).detach().cpu()
+            counter = counter + 1
         # move colors to RGB color domain (0,1)
         reconstruction_texture2 = 0.5 * (reconstruction_texture2 + 1)
 
@@ -170,21 +172,25 @@ def get_img_from_fig(fig, dpi=180):
 
 
 def get_mapping_area(model_F_mapping,
-                    F_alpha,
-                    mask_frames,
-                    resx,
-                    number_of_frames,
-                    uvw_shift,
-                    device,
-                    invert_alpha=False,
-                    alpha_thresh=-0.5):
+                     F_alpha,
+                     mask_frames,
+                     resx,
+                     depth,
+                     number_of_frames,
+                     uvw_shift,
+                     device,
+                     invert_alpha=False,
+                     alpha_thresh=-0.5):
     # consider only pixels that their masks are 1
     relis_i, relis_j, relis_f = torch.where(mask_frames)
-
+    #TODO check if i and j should be swapped
+    depth_at_jif = depth[relis_i, relis_j, relis_f]
     # split all i,j,f coordinates to batches of size 100k
     relisa = np.array_split(relis_i.numpy(),
                             np.ceil(relis_i.shape[0] / 100000))
     reljsa = np.array_split(relis_j.numpy(),
+                            np.ceil(relis_i.shape[0] / 100000))
+    reldsa = np.array_split(depth_at_jif.numpy(),
                             np.ceil(relis_i.shape[0] / 100000))
     relfsa = np.array_split(relis_f.numpy(),
                             np.ceil(relis_i.shape[0] / 100000))
@@ -200,14 +206,16 @@ def get_mapping_area(model_F_mapping,
         for i in range(len(relisa)):
             relis = torch.from_numpy(relisa[i]).unsqueeze(1) / (resx / 2) - 1
             reljs = torch.from_numpy(reljsa[i]).unsqueeze(1) / (resx / 2) - 1
+            relds = torch.from_numpy(reldsa[i]).unsqueeze(1) / (resx / 2) - 1
             relfs = torch.from_numpy(
                 relfsa[i]).unsqueeze(1) / (number_of_frames / 2) - 1
 
             uvw = model_F_mapping(
-                torch.cat((reljs, relis, relfs), dim=1).to(device)).cpu()
+                torch.cat((reljs, relis, relds, relfs),
+                          dim=1).to(device)).cpu()
             alpha = F_alpha(
-                torch.cat((reljs, relis, relfs),
-                        dim=1).to(device)).cpu().squeeze()
+                torch.cat((reljs, relis, relds, relfs),
+                          dim=1).to(device)).cpu().squeeze()
             if invert_alpha:
                 alpha = -alpha
             if torch.any(alpha > alpha_thresh):
@@ -233,7 +241,8 @@ def get_mapping_area(model_F_mapping,
     miny = np.maximum(miny, -1)
     mind = np.maximum(mind, -1)
 
-    edge_size = torch.max(torch.tensor([maxx - minx, maxy - miny, maxd - mind]))
+    edge_size = torch.max(torch.tensor([maxx - minx, maxy - miny,
+                                        maxd - mind]))
     return maxx, minx, maxy, miny, maxd, mind, edge_size
 
 
@@ -242,7 +251,7 @@ def get_mapping_area(model_F_mapping,
 
 
 def normalize_uvw_images(uvw_frames_reconstruction, values_shift, edge_size,
-                        minx, miny, mind):
+                         minx, miny, mind):
     uvw_frames_reconstruction[:, :, 0, :] = (
         (uvw_frames_reconstruction[:, :, 0, :] * 0.5 + values_shift) -
         np.float64(minx)) / edge_size
@@ -258,27 +267,28 @@ def normalize_uvw_images(uvw_frames_reconstruction, values_shift, edge_size,
 
 
 def evaluate_model(model_F_atlas,
-                    resx,
-                    resy,
-                    resd,
-                    number_of_frames,
-                    model_F_mapping1,
-                    model_F_mapping2,
-                    model_alpha,
-                    video_frames,
-                    results_folder,
-                    iteration,
-                    mask_frames,
-                    optimizer_all,
-                    writer,
-                    vid_name,
-                    derivative_amount,
-                    uvw_mapping_scale,
-                    optical_flows,
-                    optical_flows_mask,
-                    device,
-                    save_checkpoint=True,
-                    show_atlas_alpha=False):
+                   resx,
+                   resy,
+                   resd,
+                   number_of_frames,
+                   model_F_mapping1,
+                   model_F_mapping2,
+                   model_alpha,
+                   video_frames,
+                   depth_frames,
+                   results_folder,
+                   iteration,
+                   mask_frames,
+                   optimizer_all,
+                   writer,
+                   vid_name,
+                   derivative_amount,
+                   uvw_mapping_scale,
+                   optical_flows,
+                   optical_flows_mask,
+                   device,
+                   save_checkpoint=True,
+                   show_atlas_alpha=False):
 
     os.mkdir(os.path.join(results_folder, '%06d' % iteration))
     evaluation_folder = os.path.join(results_folder, '%06d' % iteration)
@@ -306,8 +316,9 @@ def evaluate_model(model_F_atlas,
         model_alpha,
         mask_frames > -1,
         larger_dim,
+        depth_frames,
         number_of_frames,
-        torch.tensor([-0.5, -0.5]),
+        torch.tensor([-0.5, -0.5, -0.5]),
         device,
         invert_alpha=True)
     maxxt, minxt, maxyt, minyt, maxdt, mindt, edge_sizet = get_mapping_area(
@@ -315,38 +326,36 @@ def evaluate_model(model_F_atlas,
         model_alpha,
         mask_frames > 0.5,
         larger_dim,
+        depth_frames,
         number_of_frames,
-        torch.tensor([0.5, 0.5]),
+        torch.tensor([0.5, 0.5, 0.5]),
         device,
         invert_alpha=False,
         alpha_thresh=0.95)
 
     edited_tex1, texture_orig1 = get_high_res_texture(1000, minx,
-                                                        minx + edge_size, miny,
-                                                        miny + edge_size,
-                                                        mind, mind + edge_size,
-                                                        model_F_atlas, device)
+                                                      minx + edge_size, miny,
+                                                      miny + edge_size, mind,
+                                                      mind + edge_size,
+                                                      model_F_atlas, device)
 
-    edited_tex2, texture_orig2 = get_high_res_texture(1000, minx2,
-                                                        minx2 + edge_size2,
-                                                        miny2,
-                                                        miny2 + edge_size2,
-                                                        mind2, mind2 + edge_size2,
-                                                        model_F_atlas, device)
+    edited_tex2, texture_orig2 = get_high_res_texture(
+        1000, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2, mind2,
+        mind2 + edge_size2, model_F_atlas, device)
 
     _, texture_orig1t = get_high_res_texture(500, minxt, minxt + edge_sizet,
-                                                minyt, minyt + edge_sizet,
-                                                mindt, mindt + edge_sizet,
-                                                model_F_atlas, device)
+                                             minyt, minyt + edge_sizet, mindt,
+                                             mindt + edge_sizet, model_F_atlas,
+                                             device)
 
     _, texture_orig2t = get_high_res_texture(500, minx2, minx2 + edge_size2,
-                                                miny2, miny2 + edge_size2,
-                                                mind2, mind2 + edge_size2,
-                                                model_F_atlas, device)
+                                             miny2, miny2 + edge_size2, mind2,
+                                             mind2 + edge_size2, model_F_atlas,
+                                             device)
     checkerboard_ = np.array(Image.open(str("checkerboard.png"))).astype(
         np.float64) / 255.
     checkerboard_ = cv2.resize(checkerboard_, (500, 500))
-    checkerboard_ = torch.from_numpy(checkerboard_[:, :, :, :3])
+    checkerboard_ = torch.from_numpy(checkerboard_[:, :, :3])
     #TODO get back here, if it doesnt work
     checkerboard = (checkerboard_ * 0.3 + texture_orig1t * 0.7)
     checkerboard2 = (checkerboard_ * 0.3 + texture_orig2t * 0.7)
@@ -376,8 +385,8 @@ def evaluate_model(model_F_atlas,
     rgb_error_video = np.zeros((resy, resx, number_of_frames))
     rgb_residual_video = np.zeros((resy, resx, 3, number_of_frames))
 
-    uv1_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
-    uv2_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
+    uvw1_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
+    uvw2_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
 
     all_masks1 = np.zeros((1000, 1000, number_of_frames))
     all_masks2 = np.zeros((1000, 1000, number_of_frames))
@@ -409,29 +418,31 @@ def evaluate_model(model_F_atlas,
                     relisa[i]).unsqueeze(1) / (larger_dim / 2) - 1
                 reljs = torch.from_numpy(
                     reljsa[i]).unsqueeze(1) / (larger_dim / 2) - 1
+                #TODO maybe i and j should be swapped
+                depth_current = (depth_frames[relisa[i], reljsa[i], f] * 2) - 1
                 # Map video indices to uv coordinates using the two mapping networks:
-                uv_temp1 = model_F_mapping1(
-                    torch.cat(
-                        (reljs, relis, (f / (number_of_frames / 2.0) - 1) *
-                         torch.ones_like(relis)),
-                        dim=1).to(device))
-                uv_temp2 = model_F_mapping2(
-                    torch.cat(
-                        (reljs, relis, (f / (number_of_frames / 2.0) - 1) *
-                         torch.ones_like(relis)),
-                        dim=1).to(device))
+                uvw_temp1 = model_F_mapping1(
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device))
+                uvw_temp2 = model_F_mapping2(
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device))
                 # Sample RGB values from the atlas:
-                rgb_current1 = model_F_atlas(uv_temp1 * 0.5 + 0.5)
-                rgb_current2 = model_F_atlas(uv_temp2 * 0.5 - 0.5)
+                rgb_current1 = model_F_atlas(uvw_temp1 * 0.5 + 0.5)
+                rgb_current2 = model_F_atlas(uvw_temp2 * 0.5 - 0.5)
 
                 rgb_current1 = (rgb_current1 + 1) * 0.5
                 rgb_current2 = (rgb_current2 + 1) * 0.5
 
                 alpha = 0.5 * (model_alpha(
-                    torch.cat(
-                        (reljs, relis, (f / (number_of_frames / 2.0) - 1) *
-                         torch.ones_like(relis)),
-                        dim=1).to(device)) + 1.0)
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device)) + 1.0)
                 alpha = alpha * 0.99
                 alpha = alpha + 0.001
 
@@ -449,21 +460,23 @@ def evaluate_model(model_F_atlas,
                 # reconstruct rigidity losses for visualization:
                 rigidity_loss1 = get_rigidity_loss(
                     jif_foreground,
+                    depth_current,
                     derivative_amount,
                     larger_dim,
                     number_of_frames,
                     model_F_mapping1,
-                    uv_temp1,
+                    uvw_temp1,
                     device,
                     uvw_mapping_scale=uvw_mapping_scale,
                     return_all=True)
                 rigidity_loss2 = get_rigidity_loss(
                     jif_foreground,
+                    depth_current,
                     derivative_amount,
                     larger_dim,
                     number_of_frames,
                     model_F_mapping2,
-                    uv_temp2,
+                    uvw_temp2,
                     device,
                     uvw_mapping_scale=uvw_mapping_scale,
                     return_all=True)
@@ -471,7 +484,8 @@ def evaluate_model(model_F_atlas,
                 # Reconstruct flow losses for visualization:
                 if f < (number_of_frames - 1):
                     flow_loss1 = get_optical_flow_loss_all(jif_foreground,
-                                                           uv_temp1,
+                                                           depth_current,
+                                                           uvw_temp1,
                                                            larger_dim,
                                                            number_of_frames,
                                                            model_F_mapping1,
@@ -482,7 +496,8 @@ def evaluate_model(model_F_atlas,
                                                            alpha=alpha)
 
                     flow_loss2 = get_optical_flow_loss_all(jif_foreground,
-                                                           uv_temp2,
+                                                           depth_current,
+                                                           uvw_temp2,
                                                            larger_dim,
                                                            number_of_frames,
                                                            model_F_mapping2,
@@ -500,41 +515,41 @@ def evaluate_model(model_F_atlas,
                     number_of_frames, optical_flows, optical_flows_mask,
                     device)
                 # Same uv values from each frame for visualization:
-                uv_temp1 = uv_temp1.detach().cpu()
-                uv_temp2 = uv_temp2.detach().cpu()
+                uvw_temp1 = uvw_temp1.detach().cpu()
+                uvw_temp2 = uvw_temp2.detach().cpu()
 
-                uv1_frames_reconstruction[relisa[i], reljsa[i], 0,
-                                          f] = uv_temp1[:, 0]
-                uv1_frames_reconstruction[relisa[i], reljsa[i], 1,
-                                          f] = uv_temp1[:, 1]
+                uvw1_frames_reconstruction[relisa[i], reljsa[i], 0,
+                                           f] = uvw_temp1[:, 0]
+                uvw1_frames_reconstruction[relisa[i], reljsa[i], 1,
+                                           f] = uvw_temp1[:, 1]
 
-                uv2_frames_reconstruction[relisa[i], reljsa[i], 0,
-                                          f] = uv_temp2[:, 0]
-                uv2_frames_reconstruction[relisa[i], reljsa[i], 1,
-                                          f] = uv_temp2[:, 1]
+                uvw2_frames_reconstruction[relisa[i], reljsa[i], 0,
+                                           f] = uvw_temp2[:, 0]
+                uvw2_frames_reconstruction[relisa[i], reljsa[i], 1,
+                                           f] = uvw_temp2[:, 1]
 
                 # pixels reconstruction from the edited foreground texture:
                 rgb21, pointsx1, pointsy1, relevant1 = get_colors(
                     1000, minx, minx + edge_size, miny, miny + edge_size,
-                    uv_temp1[:, 0] * 0.5 + 0.5, uv_temp1[:, 1] * 0.5 + 0.5,
+                    uvw_temp1[:, 0] * 0.5 + 0.5, uvw_temp1[:, 1] * 0.5 + 0.5,
                     edited_tex1)
 
                 # reconstruct background pixels from the edited background
                 rgb22, pointsx2, pointsy2, relevant2 = get_colors(
                     1000, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
-                    uv_temp2[:, 0] * 0.5 - 0.5, uv_temp2[:, 1] * 0.5 - 0.5,
+                    uvw_temp2[:, 0] * 0.5 - 0.5, uvw_temp2[:, 1] * 0.5 - 0.5,
                     edited_tex2)
                 # pixels reconstruction from the checkerboard texture:
                 rgb21_tex, pointsx1_tex, pointsy1_tex, relevant1_tex = get_colors(
                     500, minxt, minxt + edge_sizet, minyt, minyt + edge_sizet,
-                    uv_temp1[:, 0] * 0.5 + 0.5, uv_temp1[:, 1] * 0.5 + 0.5,
+                    uvw_temp1[:, 0] * 0.5 + 0.5, uvw_temp1[:, 1] * 0.5 + 0.5,
                     checkerboard)
 
                 rgb22_tex, pointsx2_tex, pointsy2_tex, relevant2_tex = get_colors(
                     500, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
-                    uv_temp2[:, 0] * 0.5 - 0.5, uv_temp2[:, 1] * 0.5 - 0.5,
+                    uvw_temp2[:, 0] * 0.5 - 0.5, uvw_temp2[:, 1] * 0.5 - 0.5,
                     checkerboard2)
-
+                #TODO used for displaying the atlases as images. We should apply to 3D!
                 m1_alpha_v.append(pointsy1)
                 m1_alpha_u.append(pointsx1)
                 m1_alpha_alpha.append(alpha.cpu().squeeze()[relevant1].numpy())
@@ -643,11 +658,10 @@ def evaluate_model(model_F_atlas,
         masks1_alpha = np.nanmedian(all_masks1[:, :, :], axis=2)
         masks2_alpha = np.nanpercentile(all_masks2[:, :, :], 90, axis=2)
 
-    uv1_frames_reconstruction = normalize_uvw_images(uv1_frames_reconstruction,
-                                                    0.5, edge_size, minx, miny)
-    uv2_frames_reconstruction = normalize_uvw_images(uv2_frames_reconstruction,
-                                                    -0.5, edge_size2, minx2,
-                                                    miny2)
+    uvw1_frames_reconstruction = normalize_uvw_images(
+        uvw1_frames_reconstruction, 0.5, edge_size, minx, miny, mind)
+    uvw2_frames_reconstruction = normalize_uvw_images(
+        uvw2_frames_reconstruction, -0.5, edge_size2, minx2, miny2, mind2)
 
     Path(evaluation_folder).mkdir(parents=True, exist_ok=True)
     mpimg.imsave("%s/texture_edit1.png" % (evaluation_folder),
@@ -785,11 +799,11 @@ def evaluate_model(model_F_atlas,
             ((rgb_residual_video[:, :, :, i] + 0.5) * 255).astype(np.uint8))
 
         writer_uv_1.append_data(
-            (uv1_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
+            (uvw1_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
         writer_uv_2.append_data(
-            (uv2_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
+            (uvw2_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
         writer_uv_1_masked.append_data(
-            (uv1_frames_reconstruction[:, :, :, i] *
+            (uvw1_frames_reconstruction[:, :, :, i] *
              alpha_reconstruction[:, :, i][:, :, np.newaxis] * (255)).astype(
                  np.uint8))
 

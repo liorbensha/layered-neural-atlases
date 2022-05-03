@@ -172,8 +172,7 @@ def main(config):
         'params': list(model_alpha.parameters())
     }, {
         'params': list(model_F_atlas.parameters())
-    }],
-                               lr=0.0001)
+    }], lr=0.0001)
 
     larger_dim = np.maximum(resx, resy)
     if not load_checkpoint:
@@ -208,8 +207,7 @@ def main(config):
         optimizer_all.load_state_dict(init_file["optimizer_all_state_dict"])
         start_iteration = init_file["iteration"]
 
-    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames,
-                                       depth_frames)
+    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames, depth_frames)
 
     # Start training!
     for i in range(start_iteration, iters_num):
