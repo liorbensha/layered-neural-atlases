@@ -82,8 +82,9 @@ def get_rigidity_loss(jif_foreground,
     js_patch = torch.cat(
         (jif_foreground[0, :],
          jif_foreground[0, :] - derivative_amount)) / (resx / 2) - 1
-    ds_patch = torch.cat((depth_at_jif_current, depth_at_jif_current -
-                          derivative_amount)).unsqueeze(1) / (resx / 2) - 1
+    ds_patch = torch.cat(
+        (depth_at_jif_current,
+         depth_at_jif_current - derivative_amount)) / (resx / 2) - 1
     fs_patch = torch.cat((jif_foreground[2, :],
                           jif_foreground[2, :])) / (number_of_frames / 2.0) - 1
     xydt_p = torch.cat((js_patch, is_patch, ds_patch, fs_patch),
@@ -190,9 +191,10 @@ def get_optical_flow_loss(jif_foreground,
                           use_alpha=False,
                           alpha=1.0):
     # Forward flow:
-    uvw_foreground_forward_relevant, xydt_foreground_forward_should_match, relevant_batch_indices_forward = get_corresponding_flow_matches(
-        jif_foreground, optical_flows_mask, optical_flows, resx,
-        number_of_frames, True, uvw_foreground)
+    uvw_foreground_forward_relevant, xydt_foreground_forward_should_match, relevant_batch_indices_forward = \
+        get_corresponding_flow_matches(
+        jif_foreground, depth_at_jif_current, optical_flows_mask,
+        optical_flows, resx, number_of_frames, True, uvw_foreground)
     uvw_foreground_forward_should_match = model_F_mapping(
         xydt_foreground_forward_should_match.to(device))
     loss_flow_next = (uvw_foreground_forward_should_match -
@@ -200,12 +202,13 @@ def get_optical_flow_loss(jif_foreground,
                           dim=1) * resx / (2 * uvw_mapping_scale)
 
     # Backward flow:
-    uvw_foreground_backward_relevant, xydt_foreground_backward_should_match, relevant_batch_indices_backward = get_corresponding_flow_matches(
-        jif_foreground, optical_flows_reverse_mask, optical_flows_reverse,
+    uvw_foreground_backward_relevant, xydt_foreground_backward_should_match, relevant_batch_indices_backward = \
+    get_corresponding_flow_matches(
+        jif_foreground, depth_at_jif_current, optical_flows_reverse_mask, optical_flows_reverse,
         resx, number_of_frames, False, uvw_foreground)
-    uv_foreground_backward_should_match = model_F_mapping(
+    uvw_foreground_backward_should_match = model_F_mapping(
         xydt_foreground_backward_should_match.to(device))
-    loss_flow_prev = (uv_foreground_backward_should_match -
+    loss_flow_prev = (uvw_foreground_backward_should_match -
                       uvw_foreground_backward_relevant).norm(
                           dim=1) * resx / (2 * uvw_mapping_scale)
 
@@ -256,12 +259,12 @@ def get_corresponding_flow_matches(jif_foreground,
              jif_foreground_forward_relevant[1] + forward_flows_for_loss[:, 1],
              jif_foreground_forward_relevant[2] - forward_frames_amount))
 
-    xydt_foreground_forward_should_match = torch.stack(
-        (jif_foreground_forward_should_match[0] / (resx / 2) - 1,
-         jif_foreground_forward_should_match[1] / (resx / 2) - 1,
-         depth_at_jif_current[:, relevant_batch_indices,
-                              0], jif_foreground_forward_should_match[2] /
-         (number_of_frames / 2) - 1)).T
+    xydt_foreground_forward_should_match = torch.stack((
+        jif_foreground_forward_should_match[0] / (resx / 2) - 1,
+        jif_foreground_forward_should_match[1] / (resx / 2) - 1,
+        # TODO: (Yakir) make sure this is the correct depth
+        depth_at_jif_current[relevant_batch_indices, 0],
+        jif_foreground_forward_should_match[2] / (number_of_frames / 2) - 1)).T
     if use_uvw:
         uvw_foreground_forward_relevant = uvw_foreground[batch_forward_mask[0]]
         return uvw_foreground_forward_relevant, xydt_foreground_forward_should_match, relevant_batch_indices
@@ -279,10 +282,10 @@ def get_corresponding_flow_matches_all(jif_foreground,
                                        use_uvw=True):
     jif_foreground_forward_relevant = jif_foreground
 
-    forward_flows_for_loss = optical_flows[jif_foreground_forward_relevant[1],
-                                           jif_foreground_forward_relevant[0],
-                                           jif_foreground_forward_relevant[2],
-                                           0].squeeze(-1)
+    forward_flows_for_loss = optical_flows[
+        jif_foreground_forward_relevant[1],
+        jif_foreground_forward_relevant[0], :,
+        jif_foreground_forward_relevant[2], 0].squeeze()
     forward_flows_for_loss_mask = optical_flows_mask[
         jif_foreground_forward_relevant[1], jif_foreground_forward_relevant[0],
         jif_foreground_forward_relevant[2], 0].squeeze()
@@ -308,14 +311,15 @@ def get_corresponding_flow_matches_all(jif_foreground,
 # Compute alpha optical flow loss (Eq. 12 in the paper)
 
 
-def get_optical_flow_alpha_loss(model_alpha, jif_foreground, alpha,
-                                optical_flows_reverse,
+def get_optical_flow_alpha_loss(model_alpha, jif_foreground, depth_at_jif,
+                                alpha, optical_flows_reverse,
                                 optical_flows_reverse_mask, resx,
                                 number_of_frames, optical_flows,
                                 optical_flows_mask, device):
     # Forward flow
     xyt_foreground_forward_should_match, relevant_batch_indices_forward = get_corresponding_flow_matches(
         jif_foreground,
+        depth_at_jif,
         optical_flows_mask,
         optical_flows,
         resx,
@@ -336,6 +340,7 @@ def get_optical_flow_alpha_loss(model_alpha, jif_foreground, alpha,
     # Backward loss
     xyt_foreground_backward_should_match, relevant_batch_indices_backward = get_corresponding_flow_matches(
         jif_foreground,
+        depth_at_jif,
         optical_flows_reverse_mask,
         optical_flows_reverse,
         resx,
@@ -357,14 +362,14 @@ def get_optical_flow_alpha_loss(model_alpha, jif_foreground, alpha,
 
 
 # Compute alpha optical flow loss (Eq. 12 in the paper) for all the pixels for visualization.
-def get_optical_flow_alpha_loss_all(model_alpha, jif_foreground, alpha, resx,
-                                    number_of_frames, optical_flows,
-                                    optical_flows_mask, device):
-    xyt_foreground_forward_should_match, relevant_batch_indices_forward = get_corresponding_flow_matches_all(
-        jif_foreground, optical_flows_mask, optical_flows, resx,
-        number_of_frames)
+def get_optical_flow_alpha_loss_all(model_alpha, jif_foreground, depth_at_jif,
+                                    alpha, resx, number_of_frames,
+                                    optical_flows, optical_flows_mask, device):
+    xydt_foreground_forward_should_match, relevant_batch_indices_forward = get_corresponding_flow_matches_all(
+        jif_foreground, depth_at_jif, optical_flows_mask, optical_flows, resx,
+        number_of_frames)  # type: ignore
     alpha_foreground_forward_should_match = model_alpha(
-        xyt_foreground_forward_should_match.to(device))
+        xydt_foreground_forward_should_match.to(device))
     alpha_foreground_forward_should_match = 0.5 * \
         (alpha_foreground_forward_should_match + 1.0)
     alpha_foreground_forward_should_match = alpha_foreground_forward_should_match * 0.99

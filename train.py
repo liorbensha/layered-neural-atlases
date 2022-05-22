@@ -48,7 +48,7 @@ def main(config):
     pretrain_mapping2 = config["pretrain_mapping2"]
     pretrain_iter_number = config["pretrain_iter_number"]
 
-    # the scale of the atlas uv coordinates relative to frame's xy coordinates
+    # the scale of the atlas uvw coordinates relative to frame's xy coordinates
     uvw_mapping_scale = config["uvw_mapping_scale"]
 
     # M_\alpha's hyper parameters:
@@ -123,7 +123,7 @@ def main(config):
     writer = SummaryWriter(log_dir=str(results_folder))
     optical_flows_mask, video_frames, optical_flows_reverse_mask, mask_frames, video_frames_dx, \
         video_frames_dy, optical_flows_reverse, optical_flows, depth_frames = load_input_data(
-            resy, resx, maximum_number_of_frames, data_folder, True,  True, vid_root, vid_name)
+            resy, resx, maximum_number_of_frames, data_folder, True, True, vid_root, vid_name)
     number_of_frames = video_frames.shape[3]
     # save a video showing the masked part of the forward optical flow:s
     save_mask_flow(optical_flows_mask, video_frames, results_folder)
@@ -172,7 +172,8 @@ def main(config):
         'params': list(model_alpha.parameters())
     }, {
         'params': list(model_F_atlas.parameters())
-    }], lr=0.0001)
+    }],
+                               lr=0.0001)
 
     larger_dim = np.maximum(resx, resy)
     if not load_checkpoint:
@@ -207,7 +208,8 @@ def main(config):
         optimizer_all.load_state_dict(init_file["optimizer_all_state_dict"])
         start_iteration = init_file["iteration"]
 
-    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames, depth_frames)
+    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames,
+                                       depth_frames)
 
     # Start training!
     for i in range(start_iteration, iters_num):
@@ -240,9 +242,9 @@ def main(config):
             (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] /
              (larger_dim / 2) - 1, depth_at_jif_current / (larger_dim / 2) - 1,
              jif_current[2, :] / (number_of_frames / 2.0) - 1),
-            dim=1).to(device)  # size (batch, 3)
+            dim=1).to(device)  # size (batch, 4)
 
-        # get the atlas UV coordinates from the two mapping networks;
+        # get the atlas UVW coordinates from the two mapping networks;
         uvw_foreground1 = model_F_mapping1(xydt_current)
         uvw_foreground2 = model_F_mapping2(xydt_current)
 
@@ -321,6 +323,7 @@ def main(config):
                 uvw_mapping_scale=uvw_mapping_scale)
 
         flow_loss1 = get_optical_flow_loss(jif_current,
+                                           depth_at_jif_current,
                                            uvw_foreground1,
                                            optical_flows_reverse,
                                            optical_flows_reverse_mask,
@@ -335,6 +338,7 @@ def main(config):
                                            alpha=alpha)
 
         flow_loss2 = get_optical_flow_loss(jif_current,
+                                           depth_at_jif_current,
                                            uvw_foreground2,
                                            optical_flows_reverse,
                                            optical_flows_reverse_mask,
@@ -349,9 +353,9 @@ def main(config):
                                            alpha=1 - alpha)
 
         flow_alpha_loss = get_optical_flow_alpha_loss(
-            model_alpha, jif_current, alpha, optical_flows_reverse,
-            optical_flows_reverse_mask, larger_dim, number_of_frames,
-            optical_flows, optical_flows_mask, device)
+            model_alpha, jif_current, depth_at_jif_current, alpha,
+            optical_flows_reverse, optical_flows_reverse_mask, larger_dim,
+            number_of_frames, optical_flows, optical_flows_mask, device)
 
         print("flow alpha loss:")
         print(flow_alpha_loss)

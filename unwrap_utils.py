@@ -80,12 +80,10 @@ def load_input_data(resy, resx, maximum_number_of_frames, data_folder,
     maskrcnn_dir = vid_root / f'{vid_name}_maskrcnn'
     depth_dir = vid_root / f'{vid_name}_depth'
 
-    depth_frames = torch.from_numpy(
-        cv2.resize(
-            np.array([
-                load_raw_float32_image(file_name)
-                for file_name in depth_dir.glob("*.raw")
-            ]), (resx, resy)))
+    depth_frames = torch.FloatTensor([
+        cv2.resize(load_raw_float32_image(file_name), (resx, resy))
+        for file_name in depth_dir.glob("*.raw")
+    ])
 
     input_files = sorted(
         list(data_folder.glob('*.jpg')) + list(data_folder.glob('*.png')))
@@ -159,11 +157,12 @@ def get_tuples(number_of_frames, video_frames, depth_frames):
     # video_frames shape: (resy, resx, 3, num_frames), mask_frames shape: (resy, resx, num_frames)
     jif_all = []
     depth_all = []
+    depth_frames = 2 * (depth_frames / depth_frames.max()
+                        ) - 1  # TODO: (Yakir) should be here or on each frame?
     for f in range(number_of_frames):
         mask = (video_frames[:, :, :, f] > -1).any(dim=2)
         relis, reljs = torch.where(mask > 0.5)
-        depth = depth_frames[f][reljs, relis]
-        depth = (2 * depth) - 1
+        depth = depth_frames[f][relis, reljs]
         #TODO try positional encoding?
         depth_all.append(depth)
         jif_all.append(torch.stack((reljs, relis, f * torch.ones_like(reljs))))
@@ -175,7 +174,7 @@ def get_tuples(number_of_frames, video_frames, depth_frames):
 
 def pre_train_mapping(model_F_mapping,
                       frames_num,
-                      uv_mapping_scale,
+                      uvw_mapping_scale,
                       resx,
                       resy,
                       larger_dim,
@@ -198,7 +197,7 @@ def pre_train_mapping(model_F_mapping,
 
             model_F_mapping.zero_grad()
             # TODO
-            loss = (xydt[:, :3] * uv_mapping_scale -
+            loss = (xydt[:, :3] * uvw_mapping_scale -
                     uv_temp).norm(dim=1).mean()
             print(f"pre-train loss: {loss.item()}")
             loss.backward()

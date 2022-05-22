@@ -146,7 +146,7 @@ def main(training_folder, frames_folder, mask_rcnn_folder, output_folder,
                    optical_flows_mask,
                    device,
                    save_checkpoint=False,
-                   show_atlas_alpha=True)
+                   show_atlas_alpha=False)
 
 
 if __name__ == "__main__":
