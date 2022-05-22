@@ -237,10 +237,10 @@ def main(config):
             0, :], jif_current[2, :]].squeeze(1).to(device).unsqueeze(-1)
 
         # normalize coordinates to be in [-1,1]
-        # TODO (Lior) added 3rd coordinate
+        # TODO: (Lior) added 3rd coordinate - already in [-1, 1]
         xydt_current = torch.cat(
             (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] /
-             (larger_dim / 2) - 1, depth_at_jif_current / (larger_dim / 2) - 1,
+             (larger_dim / 2) - 1, depth_at_jif_current,
              jif_current[2, :] / (number_of_frames / 2.0) - 1),
             dim=1).to(device)  # size (batch, 4)
 
