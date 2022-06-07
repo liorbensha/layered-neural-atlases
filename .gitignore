@@ -12,3 +12,4 @@ pretrained_models/
 results/
 thirdparty/
 *.db
+run_neural_morphings.lsf
