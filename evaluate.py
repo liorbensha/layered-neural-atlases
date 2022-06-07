@@ -187,7 +187,7 @@ def get_mapping_area(model_F_mapping,
     # consider only pixels that their masks are 1
     relis_i, relis_j, relis_f = torch.where(mask_frames)
     #TODO check if i and j should be swapped
-    depth_at_jif = depth[relis_i, relis_j, relis_f]
+    depth_at_jif = depth[relis_f, relis_i, relis_j]
     # split all i,j,f coordinates to batches of size 100k
     relisa = np.array_split(relis_i.numpy(),
                             np.ceil(relis_i.shape[0] / 100000))
@@ -349,7 +349,7 @@ def evaluate_model(model_F_atlas,
 
     Path(results_folder + "/slices").mkdir(parents=True, exist_ok=True)
     for slice_index in range(num_slices):
-        slice = texture_orig1[:, :, slice_index, :]
+        slice = texture_orig2[:, :, slice_index, :]
         plt.imsave(f"{results_folder}/slices/slice{slice_index}.png",
                    slice.numpy())
 

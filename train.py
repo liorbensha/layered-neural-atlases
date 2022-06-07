@@ -240,8 +240,8 @@ def main(config):
         # TODO: (Lior) added 3rd coordinate - already in [-1, 1]
         xydt_current = torch.cat(
             (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] /
-             (larger_dim / 2) - 1, depth_at_jif_current,
-             jif_current[2, :] / (number_of_frames / 2.0) - 1),
+             (larger_dim / 2) - 1, depth_at_jif_current, jif_current[2, :] /
+             (number_of_frames / 2.0) - 1),
             dim=1).to(device)  # size (batch, 4)
 
         # get the atlas UVW coordinates from the two mapping networks;
@@ -323,7 +323,7 @@ def main(config):
                 uvw_mapping_scale=uvw_mapping_scale)
 
         flow_loss1 = get_optical_flow_loss(jif_current,
-                                           depth_at_jif_current,
+                                           depth_frames,
                                            uvw_foreground1,
                                            optical_flows_reverse,
                                            optical_flows_reverse_mask,
@@ -338,7 +338,7 @@ def main(config):
                                            alpha=alpha)
 
         flow_loss2 = get_optical_flow_loss(jif_current,
-                                           depth_at_jif_current,
+                                           depth_frames,
                                            uvw_foreground2,
                                            optical_flows_reverse,
                                            optical_flows_reverse_mask,
@@ -353,7 +353,7 @@ def main(config):
                                            alpha=1 - alpha)
 
         flow_alpha_loss = get_optical_flow_alpha_loss(
-            model_alpha, jif_current, depth_at_jif_current, alpha,
+            model_alpha, jif_current, depth_frames, alpha,
             optical_flows_reverse, optical_flows_reverse_mask, larger_dim,
             number_of_frames, optical_flows, optical_flows_mask, device)
 

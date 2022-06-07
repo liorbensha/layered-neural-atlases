@@ -85,6 +85,8 @@ def load_input_data(resy, resx, maximum_number_of_frames, data_folder,
         for file_name in depth_dir.glob("*.raw")
     ])
 
+    depth_frames = 2 * (depth_frames / depth_frames.max()) - 1
+
     input_files = sorted(
         list(data_folder.glob('*.jpg')) + list(data_folder.glob('*.png')))
 
@@ -157,8 +159,6 @@ def get_tuples(number_of_frames, video_frames, depth_frames):
     # video_frames shape: (resy, resx, 3, num_frames), mask_frames shape: (resy, resx, num_frames)
     jif_all = []
     depth_all = []
-    depth_frames = 2 * (depth_frames / depth_frames.max()
-                        ) - 1  # TODO: (Yakir) should be here or on each frame?
     for f in range(number_of_frames):
         mask = (video_frames[:, :, :, f] > -1).any(dim=2)
         relis, reljs = torch.where(mask > 0.5)
