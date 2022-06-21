@@ -115,19 +115,23 @@ def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
     with torch.no_grad():
 
         # reconsruct image row by row
+        pts_for_point_cloud = []
         for i in tqdm(indsy):
             for slice, j in enumerate(indsd):
-                reconstruction_texture2[counter, :, slice, :] = model_F_atlas(
+                row_for_slice = \
                     torch.cat((indsx.unsqueeze(1),
                                i * torch.ones_like(indsx.unsqueeze(1)),
                                j * torch.ones_like(indsx.unsqueeze(1))),
-                              dim=1).to(device)).detach().cpu()
+                              dim=1).to(device)
+                reconstruction_texture2[counter, :, slice, :] = model_F_atlas(
+                   row_for_slice).detach().cpu()
+                row_for_point_cloud = torch.cat((row_for_slice.detach().cpu(), 0.5 * (reconstruction_texture2[counter, :, slice, :] + 1)), dim=1)
+                pts_for_point_cloud.append(row_for_point_cloud)
             counter = counter + 1
         # move colors to RGB color domain (0,1)
         reconstruction_texture2 = 0.5 * (reconstruction_texture2 + 1)
-
+        pts_for_point_cloud = torch.cat(pts_for_point_cloud)
         reconsturction_texture2_orig = reconstruction_texture2.clone()
-
         #TODO (Lior&Yakir) we removed this part, since its less relevant to 3D
         # # Add text pattern to the texture, in order to visualize the mapping functions.
         # for ii in range(40, 500, 80):
@@ -152,7 +156,18 @@ def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
         #                 (10, ii + 40 + 500), cv2.FONT_HERSHEY_SIMPLEX, 1.1,
         #                 cur_color, 2, cv2.LINE_AA)
 
-        return reconstruction_texture2, reconsturction_texture2_orig
+        return reconstruction_texture2, reconsturction_texture2_orig, pts_for_point_cloud
+
+# showing point cloud given array of N X 6 (6 is for x,y,z,R,G,B)
+# RGB values are in [0,1] scale
+def point_cloud(pts_list, results_path, camera_loc=None):
+    mean_Z = torch.mean(pts_list[:, 2], axis=0)
+    spatial_query = pts_list[abs(pts_list[:, 2] - mean_Z) < 100]
+    xyz = spatial_query[:, :3]
+    rgb = spatial_query[:, 3:]
+    ax = plt.axes(projection='3d')
+    ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=rgb , s=0.01)
+    plt.savefig(results_path + '\point_cloud_result.png')
 
 
 def get_img_from_fig(fig, dpi=180):
@@ -336,15 +351,15 @@ def evaluate_model(model_F_atlas,
         invert_alpha=False,
         alpha_thresh=0.95)
 
-    num_slices = 30
-    edited_tex1, texture_orig1 = get_high_res_texture(1000, num_slices, minx,
+    num_slices = 50
+    edited_tex1, texture_orig1, pts_for_point_cloud1 = get_high_res_texture(50, num_slices, minx,
                                                       minx + edge_size, miny,
                                                       miny + edge_size, mind,
                                                       mind + edge_size,
                                                       model_F_atlas, device)
 
-    edited_tex2, texture_orig2 = get_high_res_texture(
-        1000, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
+    edited_tex2, texture_orig2, pts_for_point_cloud2 = get_high_res_texture(
+        50, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
         mind2, mind2 + edge_size2, model_F_atlas, device)
 
     Path(results_folder + "/slices").mkdir(parents=True, exist_ok=True)
@@ -352,7 +367,8 @@ def evaluate_model(model_F_atlas,
         slice = texture_orig2[:, :, slice_index, :]
         plt.imsave(f"{results_folder}/slices/slice{slice_index}.png",
                    slice.numpy())
-
+    point_cloud(pts_for_point_cloud2, results_folder + '/slices')
+    
     # _, texture_orig1t = get_high_res_texture(500, minxt, minxt + edge_sizet,
     #                                          minyt, minyt + edge_sizet, mindt,
     #                                          mindt + edge_sizet, model_F_atlas,
