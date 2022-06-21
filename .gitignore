@@ -14,3 +14,4 @@ thirdparty/
 *.db
 run_neural_morphings.lsf
 evaluation_folder/
+wandb/

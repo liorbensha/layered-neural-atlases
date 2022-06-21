@@ -2,7 +2,7 @@ import colorsys
 import io
 import os
 from pathlib import Path
-
+import wandb
 import cv2
 import imageio
 import matplotlib as mpl
@@ -131,6 +131,7 @@ def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
         # move colors to RGB color domain (0,1)
         reconstruction_texture2 = 0.5 * (reconstruction_texture2 + 1)
         pts_for_point_cloud = torch.cat(pts_for_point_cloud)
+        pts_for_point_cloud[3:] = pts_for_point_cloud[3:] * 255 
         reconsturction_texture2_orig = reconstruction_texture2.clone()
         #TODO (Lior&Yakir) we removed this part, since its less relevant to 3D
         # # Add text pattern to the texture, in order to visualize the mapping functions.
@@ -351,15 +352,15 @@ def evaluate_model(model_F_atlas,
         invert_alpha=False,
         alpha_thresh=0.95)
 
-    num_slices = 50
-    edited_tex1, texture_orig1, pts_for_point_cloud1 = get_high_res_texture(50, num_slices, minx,
+    num_slices = 100
+    edited_tex1, texture_orig1, pts_for_point_cloud1 = get_high_res_texture(100, num_slices, minx,
                                                       minx + edge_size, miny,
                                                       miny + edge_size, mind,
                                                       mind + edge_size,
                                                       model_F_atlas, device)
 
     edited_tex2, texture_orig2, pts_for_point_cloud2 = get_high_res_texture(
-        50, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
+        100, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
         mind2, mind2 + edge_size2, model_F_atlas, device)
 
     Path(results_folder + "/slices").mkdir(parents=True, exist_ok=True)
@@ -367,8 +368,15 @@ def evaluate_model(model_F_atlas,
         slice = texture_orig2[:, :, slice_index, :]
         plt.imsave(f"{results_folder}/slices/slice{slice_index}.png",
                    slice.numpy())
-    point_cloud(pts_for_point_cloud2, results_folder + '/slices')
-    
+    # point_cloud(pts_for_point_cloud2, results_folder + '/slices')
+    wandb.log(
+    {
+        "3d point cloud": wandb.Object3D(
+            {
+                "type": 'lidar/beta',
+                "points": pts_for_point_cloud2.detach().cpu().numpy()
+            }
+        )})
     # _, texture_orig1t = get_high_res_texture(500, minxt, minxt + edge_sizet,
     #                                          minyt, minyt + edge_sizet, mindt,
     #                                          mindt + edge_sizet, model_F_atlas,

@@ -3,6 +3,9 @@ import json
 import os
 import sys
 import time
+import wandb
+
+wandb.init(project="3D_atlases")
 
 import numpy as np
 import torch
@@ -183,3 +186,4 @@ if __name__ == "__main__":
 
     main(training_folder, frames_folder, mask_rcnn_folder, output_folder,
          video_name, ' '.join(sys.argv))
+    wandb.finish()
