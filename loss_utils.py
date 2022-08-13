@@ -37,12 +37,12 @@ def get_gradient_loss(video_frames_dx, video_frames_dy, jif_current,
     # TODO (Lior) We left the 2D rigid loss and added 3rd coordinate
     xplus1ydt_foreground = torch.cat(
         ((jif_current[0, :] + 1) / (resx / 2) - 1, jif_current[1, :] /
-         (resx / 2) - 1, depth_at_jif_current, jif_current[2, :] /
+         (resx / 2) - 1, depth_at_jif_current / (resx / 2) - 1, jif_current[2, :] /
          (number_of_frames / 2.0) - 1),
         dim=1).to(device)
     xyplus1dt_foreground = torch.cat(
         ((jif_current[0, :]) / (resx / 2) - 1, (jif_current[1, :] + 1) /
-         (resx / 2) - 1, depth_at_jif_current, jif_current[2, :] /
+         (resx / 2) - 1, depth_at_jif_current / (resx / 2) - 1, jif_current[2, :] /
          (number_of_frames / 2.0) - 1),
         dim=1).to(device)
 
@@ -111,7 +111,7 @@ def get_rigidity_loss(jif_foreground,
         (jif_foreground[0, :],
          jif_foreground[0, :] - derivative_amount)) / (resx / 2) - 1
     ds_patch = torch.cat(
-        (depth_at_jif_current, depth_at_jif_current - derivative_amount))
+        (depth_at_jif_current, depth_at_jif_current - derivative_amount))  / (resx / 2) - 1
     fs_patch = torch.cat((jif_foreground[2, :],
                           jif_foreground[2, :])) / (number_of_frames / 2.0) - 1
     xydt_p = torch.cat((js_patch, is_patch, ds_patch, fs_patch),

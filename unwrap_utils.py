@@ -13,6 +13,24 @@ import torch.optim as optim
 from PIL import Image
 
 
+# TODO(Yakir): added it
+def load_cameras_parameters():
+    meta_file = "./data/ayush_depth/metadata_scaled.npz"
+    with open(meta_file, "rb") as f:
+        meta = np.load(f)
+        extrinsics = np.array(meta["extrinsics"])
+        intrinsics = np.array(meta["intrinsics"])
+    assert (
+        extrinsics.shape[0] == intrinsics.shape[0]
+    ), f"#extrinsics({extrinsics.shape[0]}) != #intrinsics({intrinsics.shape[0]})"
+    third_of_frames = []
+    for i in range(len(intrinsics)):
+        if i % 3 == 0:
+            third_of_frames.append(intrinsics[i])
+
+    return np.array(third_of_frames)
+
+
 # (Lior&Yakir) We copied that from consistent depth code
 def load_raw_float32_image(file_name):
     with open(file_name, "rb") as f:
@@ -85,8 +103,6 @@ def load_input_data(resy, resx, maximum_number_of_frames, data_folder,
         for file_name in depth_dir.glob("*.raw")
     ])
 
-    depth_frames = 2 * (depth_frames / depth_frames.max()) - 1
-
     input_files = sorted(
         list(data_folder.glob('*.jpg')) + list(data_folder.glob('*.png')))
 
@@ -151,6 +167,7 @@ def load_input_data(resy, resx, maximum_number_of_frames, data_folder,
             optical_flows_mask[:, :, i, 0] = torch.ones_like(mask_flow)
             optical_flows_reverse_mask[:, :, j,
                                        0] = torch.ones_like(mask_flow_reverse)
+
     return optical_flows_mask, video_frames, optical_flows_reverse_mask, mask_frames, video_frames_dx, \
         video_frames_dy, optical_flows_reverse, optical_flows, depth_frames
 

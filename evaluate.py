@@ -2,7 +2,7 @@ import colorsys
 import io
 import os
 from pathlib import Path
-import wandb
+
 import cv2
 import imageio
 import matplotlib as mpl
@@ -16,6 +16,7 @@ from PIL import Image
 from scipy.interpolate import griddata
 from tqdm import tqdm
 
+import wandb
 from loss_utils import (get_optical_flow_alpha_loss_all,
                         get_optical_flow_loss_all, get_rigidity_loss)
 
@@ -107,10 +108,10 @@ def get_colors(resolution, minx, maxx, miny, maxy, mind, maxd, pointx, pointy,
 def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
                          maxd, model_F_atlas, device):
     indsx = torch.linspace(minx, maxx, resolution)
-    indsy = torch.linspace(miny, maxy, resolution)
+    indsy = torch.linspace(miny, maxy, resolution - 10)
     indsd = torch.linspace(mind, maxd, num_slices)
     reconstruction_texture2 = torch.zeros(
-        (resolution, resolution, num_slices, 3))
+        (resolution, resolution - 10, num_slices, 3))
     counter = 0
     with torch.no_grad():
 
@@ -123,15 +124,18 @@ def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
                                i * torch.ones_like(indsx.unsqueeze(1)),
                                j * torch.ones_like(indsx.unsqueeze(1))),
                               dim=1).to(device)
-                reconstruction_texture2[counter, :, slice, :] = model_F_atlas(
-                   row_for_slice).detach().cpu()
-                row_for_point_cloud = torch.cat((row_for_slice.detach().cpu(), 0.5 * (reconstruction_texture2[counter, :, slice, :] + 1)), dim=1)
+                reconstruction_texture2[:, counter, slice, :] = model_F_atlas(
+                    row_for_slice).detach().cpu()
+                row_for_point_cloud = torch.cat(
+                    (row_for_slice.detach().cpu(), 0.5 *
+                     (reconstruction_texture2[:, counter, slice, :] + 1)),
+                    dim=1)
                 pts_for_point_cloud.append(row_for_point_cloud)
             counter = counter + 1
         # move colors to RGB color domain (0,1)
         reconstruction_texture2 = 0.5 * (reconstruction_texture2 + 1)
         pts_for_point_cloud = torch.cat(pts_for_point_cloud)
-        pts_for_point_cloud[3:] = pts_for_point_cloud[3:] * 255 
+        pts_for_point_cloud[:, 3:] = pts_for_point_cloud[:, 3:] * 255
         reconsturction_texture2_orig = reconstruction_texture2.clone()
         #TODO (Lior&Yakir) we removed this part, since its less relevant to 3D
         # # Add text pattern to the texture, in order to visualize the mapping functions.
@@ -159,6 +163,7 @@ def get_high_res_texture(resolution, num_slices, minx, maxx, miny, maxy, mind,
 
         return reconstruction_texture2, reconsturction_texture2_orig, pts_for_point_cloud
 
+
 # showing point cloud given array of N X 6 (6 is for x,y,z,R,G,B)
 # RGB values are in [0,1] scale
 def point_cloud(pts_list, results_path, camera_loc=None):
@@ -167,7 +172,7 @@ def point_cloud(pts_list, results_path, camera_loc=None):
     xyz = spatial_query[:, :3]
     rgb = spatial_query[:, 3:]
     ax = plt.axes(projection='3d')
-    ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=rgb , s=0.01)
+    ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=rgb, s=0.01)
     plt.savefig(results_path + '\point_cloud_result.png')
 
 
@@ -269,6 +274,7 @@ def get_mapping_area(model_F_mapping,
 # which represent the information about the mapping range. The idea is to stretch this range to (0,1).
 
 
+# TODO: (Yakir) understand what is done here and if needed for our purposes?
 def normalize_uvw_images(uvw_frames_reconstruction, values_shift, edge_size,
                          minx, miny, mind):
     uvw_frames_reconstruction[:, :, 0, :] = (
@@ -326,10 +332,11 @@ def evaluate_model(model_F_atlas,
             }, '%s/checkpoint' % (results_folder))
 
     # get relevant bounding box in the foreground atlas coordinates, using the input masks.
-    minx = 0
-    miny = 0
+    minx = 0.7
+    miny = 0.25
     mind = 0
-    edge_size = 1
+    edge_size = 0.1
+    edge_size_d = 1
     maxx2, minx2, maxy2, miny2, maxd2, mind2, edge_size2 = get_mapping_area(
         model_F_mapping2,
         model_alpha,
@@ -352,31 +359,28 @@ def evaluate_model(model_F_atlas,
         invert_alpha=False,
         alpha_thresh=0.95)
 
-    num_slices = 100
-    edited_tex1, texture_orig1, pts_for_point_cloud1 = get_high_res_texture(100, num_slices, minx,
-                                                      minx + edge_size, miny,
-                                                      miny + edge_size, mind,
-                                                      mind + edge_size,
-                                                      model_F_atlas, device)
+    num_slices = 6
+    edited_tex1, texture_orig1, pts_for_point_cloud1 = get_high_res_texture(
+        500, num_slices, minx, minx + edge_size, miny, miny + edge_size, mind,
+        mind + edge_size, model_F_atlas, device)  # how is minx calculated?
 
     edited_tex2, texture_orig2, pts_for_point_cloud2 = get_high_res_texture(
-        100, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
+        500, num_slices, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
         mind2, mind2 + edge_size2, model_F_atlas, device)
 
-    Path(results_folder + "/slices").mkdir(parents=True, exist_ok=True)
-    for slice_index in range(num_slices):
-        slice = texture_orig2[:, :, slice_index, :]
-        plt.imsave(f"{results_folder}/slices/slice{slice_index}.png",
-                   slice.numpy())
+    # Path(results_folder + "/slices").mkdir(parents=True, exist_ok=True)
+    # for slice_index in range(num_slices):
+    #     slice = texture_orig2[:, :, slice_index, :]
+    #     plt.imsave(f"{results_folder}/slices/slice{slice_index}.png",
+    #                slice.numpy())
     # point_cloud(pts_for_point_cloud2, results_folder + '/slices')
-    wandb.log(
-    {
-        "3d point cloud": wandb.Object3D(
-            {
-                "type": 'lidar/beta',
-                "points": pts_for_point_cloud2.detach().cpu().numpy()
-            }
-        )})
+    wandb.log({
+        "3d point cloud":
+        wandb.Object3D({
+            "type": 'lidar/beta',
+            "points": pts_for_point_cloud2.detach().cpu().numpy()
+        })
+    })
     # _, texture_orig1t = get_high_res_texture(500, minxt, minxt + edge_sizet,
     #                                          minyt, minyt + edge_sizet, mindt,
     #                                          mindt + edge_sizet, model_F_atlas,
@@ -390,7 +394,7 @@ def evaluate_model(model_F_atlas,
     #     np.float64) / 255.
     # checkerboard_ = cv2.resize(checkerboard_, (500, 500))
     # checkerboard_ = torch.from_numpy(checkerboard_[:, :, :3])
-    # #TODO get back here, if it doesnt work
+    #TODO get back here, if it doesnt work
     # checkerboard = (checkerboard_ * 0.3 + texture_orig1t * 0.7)
     # checkerboard2 = (checkerboard_ * 0.3 + texture_orig2t * 0.7)
 
@@ -406,9 +410,9 @@ def evaluate_model(model_F_atlas,
     # video_frames_reconstruction_edit = np.zeros(
     #     (resy, resx, 3, number_of_frames))
 
-    # video_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
-    # masks1 = np.zeros((edited_tex1.shape[0], edited_tex1.shape[1]))
-    # masks2 = np.zeros((edited_tex2.shape[0], edited_tex2.shape[1]))
+    video_frames_reconstruction = np.zeros((resy, resx, 3, number_of_frames))
+    masks1 = np.zeros((edited_tex1.shape[0], edited_tex1.shape[1]))
+    masks2 = np.zeros((edited_tex2.shape[0], edited_tex2.shape[1]))
 
     # flow_loss1_video = np.zeros((resy, resx, number_of_frames))
     # flow_loss2_video = np.zeros((resy, resx, number_of_frames))
@@ -425,526 +429,526 @@ def evaluate_model(model_F_atlas,
     # all_masks1 = np.zeros((1000, 1000, number_of_frames))
     # all_masks2 = np.zeros((1000, 1000, number_of_frames))
 
-    # with torch.no_grad():
-    #     for f in range(number_of_frames):
-    #         print(f)
+    with torch.no_grad():
+        for f in range(number_of_frames):
+            print(f)
 
-    #         relis_i, reljs_i = torch.where(
-    #             torch.ones(resy, resx) > 0)  # type: ignore
+            relis_i, reljs_i = torch.where(
+                torch.ones(resy, resx) > 0)  # type: ignore
 
-    #         # split the coordinates of the entire image such that no more than 100k coordinates in each batch
-    #         relisa = np.array_split(relis_i.numpy(),
-    #                                 np.ceil(relis_i.shape[0] / 100000))
-    #         reljsa = np.array_split(reljs_i.numpy(),
-    #                                 np.ceil(relis_i.shape[0] / 100000))
+            # split the coordinates of the entire image such that no more than 100k coordinates in each batch
+            relisa = np.array_split(relis_i.numpy(),
+                                    np.ceil(relis_i.shape[0] / 100000))
+            reljsa = np.array_split(reljs_i.numpy(),
+                                    np.ceil(relis_i.shape[0] / 100000))
 
-    #         m1_alpha_v = []
-    #         m1_alpha_u = []
-    #         m1_alpha_w = []
-    #         m1_alpha_alpha = []
+            m1_alpha_v = []
+            m1_alpha_u = []
+            m1_alpha_w = []
+            m1_alpha_alpha = []
 
-    #         m2_alpha_v = []
-    #         m2_alpha_u = []
-    #         m2_alpha_w = []
-    #         m2_alpha_alpha = []
+            m2_alpha_v = []
+            m2_alpha_u = []
+            m2_alpha_w = []
+            m2_alpha_alpha = []
 
-    #         for i in range(len(relisa)):
-    #             relis = torch.from_numpy(
-    #                 relisa[i]).unsqueeze(1) / (larger_dim / 2) - 1
-    #             reljs = torch.from_numpy(
-    #                 reljsa[i]).unsqueeze(1) / (larger_dim / 2) - 1
-    #             #TODO maybe i and j should be swapped
-    #             depth_current = (depth_frames[relisa[i], reljsa[i], f] * 2) - 1
-    #             # Map video indices to uv coordinates using the two mapping networks:
-    #             uvw_temp1 = model_F_mapping1(
-    #                 torch.cat((reljs, relis, depth_current.unsqueeze(1),
-    #                            (f / (number_of_frames / 2.0) - 1) *
-    #                            torch.ones_like(relis)),
-    #                           dim=1).to(device))
-    #             uvw_temp2 = model_F_mapping2(
-    #                 torch.cat((reljs, relis, depth_current.unsqueeze(1),
-    #                            (f / (number_of_frames / 2.0) - 1) *
-    #                            torch.ones_like(relis)),
-    #                           dim=1).to(device))
-    #             # Sample RGB values from the atlas:
-    #             rgb_current1 = model_F_atlas(uvw_temp1 * 0.5 + 0.5)
-    #             rgb_current2 = model_F_atlas(uvw_temp2 * 0.5 - 0.5)
+            for i in range(len(relisa)):
+                relis = torch.from_numpy(
+                    relisa[i]).unsqueeze(1) / (larger_dim / 2) - 1
+                reljs = torch.from_numpy(
+                    reljsa[i]).unsqueeze(1) / (larger_dim / 2) - 1
+                #TODO maybe i and j should be swapped
+                depth_current = (depth_frames[f, relisa[i], reljsa[i]] * 2) - 1
+                # Map video indices to uv coordinates using the two mapping networks:
+                uvw_temp1 = model_F_mapping1(
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device))
+                uvw_temp2 = model_F_mapping2(
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device))
+                # Sample RGB values from the atlas:
+                rgb_current1 = model_F_atlas(uvw_temp1 * 0.5 + 0.5)
+                rgb_current2 = model_F_atlas(uvw_temp2 * 0.5 - 0.5)
 
-    #             rgb_current1 = (rgb_current1 + 1) * 0.5
-    #             rgb_current2 = (rgb_current2 + 1) * 0.5
+                rgb_current1 = (rgb_current1 + 1) * 0.5
+                rgb_current2 = (rgb_current2 + 1) * 0.5
 
-    #             alpha = 0.5 * (model_alpha(
-    #                 torch.cat((reljs, relis, depth_current.unsqueeze(1),
-    #                            (f / (number_of_frames / 2.0) - 1) *
-    #                            torch.ones_like(relis)),
-    #                           dim=1).to(device)) + 1.0)
-    #             alpha = alpha * 0.99
-    #             alpha = alpha + 0.001
+                alpha = 0.5 * (model_alpha(
+                    torch.cat((reljs, relis, depth_current.unsqueeze(1),
+                               (f / (number_of_frames / 2.0) - 1) *
+                               torch.ones_like(relis)),
+                              dim=1).to(device)) + 1.0)
+                alpha = alpha * 0.99
+                alpha = alpha + 0.001
 
-    #             # pixels reconstruction from the MLPs:
-    #             rgb_current = rgb_current1 * alpha + \
-    #                 rgb_current2 * (1.0 - alpha)
+                # pixels reconstruction from the MLPs:
+                rgb_current = rgb_current1 * alpha + \
+                    rgb_current2 * (1.0 - alpha)
 
-    #             jif_foreground = torch.cat(
-    #                 (torch.from_numpy(reljsa[i]).unsqueeze(-1),
-    #                  torch.from_numpy(relisa[i]).unsqueeze(-1),
-    #                  torch.ones_like(
-    #                      torch.from_numpy(relisa[i]).unsqueeze(-1)) * f),
-    #                 dim=1).T.unsqueeze(-1)
+                # jif_foreground = torch.cat(
+                #     (torch.from_numpy(reljsa[i]).unsqueeze(-1),
+                #      torch.from_numpy(relisa[i]).unsqueeze(-1),
+                #      torch.ones_like(
+                #          torch.from_numpy(relisa[i]).unsqueeze(-1)) * f),
+                #     dim=1).T.unsqueeze(-1)
 
-    #             # reconstruct rigidity losses for visualization:
-    #             rigidity_loss1 = get_rigidity_loss(
-    #                 jif_foreground,
-    #                 depth_current,
-    #                 derivative_amount,
-    #                 larger_dim,
-    #                 number_of_frames,
-    #                 model_F_mapping1,
-    #                 uvw_temp1,
-    #                 device,
-    #                 uvw_mapping_scale=uvw_mapping_scale,
-    #                 return_all=True)
-    #             rigidity_loss2 = get_rigidity_loss(
-    #                 jif_foreground,
-    #                 depth_current,
-    #                 derivative_amount,
-    #                 larger_dim,
-    #                 number_of_frames,
-    #                 model_F_mapping2,
-    #                 uvw_temp2,
-    #                 device,
-    #                 uvw_mapping_scale=uvw_mapping_scale,
-    #                 return_all=True)
+                # reconstruct rigidity losses for visualization:
+                # rigidity_loss1 = get_rigidity_loss(
+                #     jif_foreground,
+                #     depth_current,
+                #     derivative_amount,
+                #     larger_dim,
+                #     number_of_frames,
+                #     model_F_mapping1,
+                #     uvw_temp1,
+                #     device,
+                #     uvw_mapping_scale=uvw_mapping_scale,
+                #     return_all=True)
+                # rigidity_loss2 = get_rigidity_loss(
+                #     jif_foreground,
+                #     depth_current,
+                #     derivative_amount,
+                #     larger_dim,
+                #     number_of_frames,
+                #     model_F_mapping2,
+                #     uvw_temp2,
+                #     device,
+                #     uvw_mapping_scale=uvw_mapping_scale,
+                #     return_all=True)
 
-    #             # Reconstruct flow losses for visualization:
-    #             if f < (number_of_frames - 1):
-    #                 flow_loss1 = get_optical_flow_loss_all(jif_foreground,
-    #                                                        depth_current,
-    #                                                        uvw_temp1,
-    #                                                        larger_dim,
-    #                                                        number_of_frames,
-    #                                                        model_F_mapping1,
-    #                                                        optical_flows,
-    #                                                        optical_flows_mask,
-    #                                                        uvw_mapping_scale,
-    #                                                        device,
-    #                                                        alpha=alpha)
+                # Reconstruct flow losses for visualization:
+                # if f < (number_of_frames - 1):
+                #     flow_loss1 = get_optical_flow_loss_all(jif_foreground,
+                #                                            depth_current,
+                #                                            uvw_temp1,
+                #                                            larger_dim,
+                #                                            number_of_frames,
+                #                                            model_F_mapping1,
+                #                                            optical_flows,
+                #                                            optical_flows_mask,
+                #                                            uvw_mapping_scale,
+                #                                            device,
+                #                                            alpha=alpha)
 
-    #                 flow_loss2 = get_optical_flow_loss_all(jif_foreground,
-    #                                                        depth_current,
-    #                                                        uvw_temp2,
-    #                                                        larger_dim,
-    #                                                        number_of_frames,
-    #                                                        model_F_mapping2,
-    #                                                        optical_flows,
-    #                                                        optical_flows_mask,
-    #                                                        uvw_mapping_scale,
-    #                                                        device,
-    #                                                        alpha=1 - alpha)
-    #             else:  # for not calculating the optical flow between the last frame and the next non-existing frame
-    #                 flow_loss1 = torch.zeros_like(relis).squeeze()
-    #                 flow_loss2 = torch.zeros_like(relis).squeeze()
+                #     flow_loss2 = get_optical_flow_loss_all(jif_foreground,
+                #                                            depth_current,
+                #                                            uvw_temp2,
+                #                                            larger_dim,
+                #                                            number_of_frames,
+                #                                            model_F_mapping2,
+                #                                            optical_flows,
+                #                                            optical_flows_mask,
+                #                                            uvw_mapping_scale,
+                #                                            device,
+                #                                            alpha=1 - alpha)
+                # else:  # for not calculating the optical flow between the last frame and the next non-existing frame
+                #     flow_loss1 = torch.zeros_like(relis).squeeze()
+                #     flow_loss2 = torch.zeros_like(relis).squeeze()
 
-    #             flow_alpha_loss = get_optical_flow_alpha_loss_all(
-    #                 model_alpha, jif_foreground, depth_current, alpha,
-    #                 larger_dim, number_of_frames, optical_flows,
-    #                 optical_flows_mask, device)
-    #             # Same uvw values from each frame for visualization:
-    #             uvw_temp1 = uvw_temp1.detach().cpu()
-    #             uvw_temp2 = uvw_temp2.detach().cpu()
+                # flow_alpha_loss = get_optical_flow_alpha_loss_all(
+                #     model_alpha, jif_foreground, depth_current, alpha,
+                #     larger_dim, number_of_frames, optical_flows,
+                #     optical_flows_mask, device)
+                # Same uvw values from each frame for visualization:
+                uvw_temp1 = uvw_temp1.detach().cpu()
+                uvw_temp2 = uvw_temp2.detach().cpu()
 
-    #             # uvw1_frames_reconstruction[relisa[i], reljsa[i], 0,
-    #             #                            f] = uvw_temp1[:, 0]
-    #             # uvw1_frames_reconstruction[relisa[i], reljsa[i], 1,
-    #             #                            f] = uvw_temp1[:, 1]
-    #             # uvw1_frames_reconstruction[relisa[i], reljsa[i], 2,
-    #             #                            f] = uvw_temp1[:, 2]
+                # uvw1_frames_reconstruction[relisa[i], reljsa[i], 0,
+                #                            f] = uvw_temp1[:, 0]
+                # uvw1_frames_reconstruction[relisa[i], reljsa[i], 1,
+                #                            f] = uvw_temp1[:, 1]
+                # uvw1_frames_reconstruction[relisa[i], reljsa[i], 2,
+                #                            f] = uvw_temp1[:, 2]
 
-    #             # uvw2_frames_reconstruction[relisa[i], reljsa[i], 0,
-    #             #                            f] = uvw_temp2[:, 0]
-    #             # uvw2_frames_reconstruction[relisa[i], reljsa[i], 1,
-    #             #                            f] = uvw_temp2[:, 1]
-    #             # uvw2_frames_reconstruction[relisa[i], reljsa[i], 2,
-    #             #                            f] = uvw_temp2[:, 2]
+                # uvw2_frames_reconstruction[relisa[i], reljsa[i], 0,
+                #                            f] = uvw_temp2[:, 0]
+                # uvw2_frames_reconstruction[relisa[i], reljsa[i], 1,
+                #                            f] = uvw_temp2[:, 1]
+                # uvw2_frames_reconstruction[relisa[i], reljsa[i], 2,
+                #                            f] = uvw_temp2[:, 2]
 
-    #             # pixels reconstruction from the edited foreground texture:
-    #             # rgb21, pointsx1, pointsy1, relevant1 = get_colors(
-    #             #     1000, minx, minx + edge_size, miny, miny + edge_size, mind,
-    #             #     mind + edge_size, uvw_temp1[:, 0] * 0.5 + 0.5,
-    #             #     uvw_temp1[:, 1] * 0.5 + 0.5, uvw_temp1[:, 2] * 0.5 + 0.5,
-    #             #     edited_tex1)
+                # pixels reconstruction from the edited foreground texture:
+                rgb21, pointsx1, pointsy1, relevant1 = get_colors(
+                    1000, minx, minx + edge_size, miny, miny + edge_size, mind,
+                    mind + edge_size, uvw_temp1[:, 0] * 0.5 + 0.5,
+                    uvw_temp1[:, 1] * 0.5 + 0.5, uvw_temp1[:, 2] * 0.5 + 0.5,
+                    edited_tex1)
 
-    #             # # reconstruct background pixels from the edited background
-    #             # rgb22, pointsx2, pointsy2, relevant2 = get_colors(
-    #             #     1000, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
-    #             #     mind2, mind2 + edge_size2, uvw_temp2[:, 0] * 0.5 - 0.5,
-    #             #     uvw_temp2[:, 1] * 0.5 - 0.5, uvw_temp2[:, 2] * 0.5 + 0.5,
-    #             #     edited_tex2)
-    #             # # pixels reconstruction from the checkerboard texture:
-    #             # rgb21_tex, pointsx1_tex, pointsy1_tex, relevant1_tex = get_colors(
-    #             #     500, minxt, minxt + edge_sizet, minyt, minyt + edge_sizet,
-    #             #     mind, mind + edge_size, uvw_temp1[:, 0] * 0.5 + 0.5,
-    #             #     uvw_temp1[:, 1] * 0.5 + 0.5, uvw_temp1[:, 2] * 0.5 + 0.5,
-    #             #     checkerboard)
+                # reconstruct background pixels from the edited background
+                rgb22, pointsx2, pointsy2, relevant2 = get_colors(
+                    1000, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
+                    mind2, mind2 + edge_size2, uvw_temp2[:, 0] * 0.5 - 0.5,
+                    uvw_temp2[:, 1] * 0.5 - 0.5, uvw_temp2[:, 2] * 0.5 + 0.5,
+                    edited_tex2)
+                # pixels reconstruction from the checkerboard texture:
+                # rgb21_tex, pointsx1_tex, pointsy1_tex, relevant1_tex = get_colors(
+                #     500, minxt, minxt + edge_sizet, minyt, minyt + edge_sizet,
+                #     mind, mind + edge_size, uvw_temp1[:, 0] * 0.5 + 0.5,
+                #     uvw_temp1[:, 1] * 0.5 + 0.5, uvw_temp1[:, 2] * 0.5 + 0.5,
+                #     checkerboard)
 
-    #             # rgb22_tex, pointsx2_tex, pointsy2_tex, relevant2_tex = get_colors(
-    #             #     500, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
-    #             #     mind2, mind2 + edge_size2, uvw_temp2[:, 0] * 0.5 - 0.5,
-    #             #     uvw_temp2[:, 1] * 0.5 - 0.5, uvw_temp2[:, 2] * 0.5 + 0.5,
-    #             #     checkerboard2)
-    #             #TODO used for displaying the atlases as images. We should apply to 3D!
-    #             # m1_alpha_v.append(pointsy1)
-    #             # m1_alpha_u.append(pointsx1)
-    #             # m1_alpha_alpha.append(alpha.cpu().squeeze()[relevant1].numpy())
+                # rgb22_tex, pointsx2_tex, pointsy2_tex, relevant2_tex = get_colors(
+                #     500, minx2, minx2 + edge_size2, miny2, miny2 + edge_size2,
+                #     mind2, mind2 + edge_size2, uvw_temp2[:, 0] * 0.5 - 0.5,
+                #     uvw_temp2[:, 1] * 0.5 - 0.5, uvw_temp2[:, 2] * 0.5 + 0.5,
+                #     checkerboard2)
+                # TODO used for displaying the atlases as images. We should apply to 3D!
+                m1_alpha_v.append(pointsy1)
+                m1_alpha_u.append(pointsx1)
+                m1_alpha_alpha.append(alpha.cpu().squeeze()[relevant1].numpy())
 
-    #             # m2_alpha_v.append(pointsy2)
-    #             # m2_alpha_u.append(pointsx2)
-    #             # m2_alpha_alpha.append(1.0 -
-    #             #                       alpha.cpu().squeeze()[relevant2].numpy())
+                m2_alpha_v.append(pointsy2)
+                m2_alpha_u.append(pointsx2)
+                m2_alpha_alpha.append(1.0 -
+                                      alpha.cpu().squeeze()[relevant2].numpy())
 
-    #             # define the mask of the foreground texture using the mapped alpha value of the current frames
-    #             # (if a foreground atlas pixel was ever used, set the mask to its alpha)
-    #             # try:
-    #             #     masks1[np.ceil(pointsy1).astype((np.int64)),
-    #             #            np.ceil(pointsx1).astype((np.int64))] = np.maximum(
-    #             #                masks1[np.ceil(pointsy1).astype((np.int64)),
-    #             #                       np.ceil(pointsx1).astype((np.int64))],
-    #             #                alpha.cpu().squeeze()[relevant1].numpy())
-    #             #     masks1[np.floor(pointsy1).astype((np.int64)),
-    #             #            np.floor(pointsx1).astype((np.int64))] = np.maximum(
-    #             #                masks1[np.floor(pointsy1).astype((np.int64)),
-    #             #                       np.floor(pointsx1).astype((np.int64))],
-    #             #                alpha.cpu().squeeze()[relevant1].numpy())
-    #             #     masks1[np.floor(pointsy1).astype((np.int64)),
-    #             #            np.ceil(pointsx1).astype((np.int64))] = np.maximum(
-    #             #                masks1[np.floor(pointsy1).astype((np.int64)),
-    #             #                       np.ceil(pointsx1).astype((np.int64))],
-    #             #                alpha.cpu().squeeze()[relevant1].numpy())
-    #             #     masks1[np.ceil(pointsy1).astype((np.int64)),
-    #             #            np.floor(pointsx1).astype((np.int64))] = np.maximum(
-    #             #                masks1[np.ceil(pointsy1).astype((np.int64)),
-    #             #                       np.floor(pointsx1).astype((np.int64))],
-    #             #                alpha.cpu().squeeze()[relevant1].numpy())
+                # define the mask of the foreground texture using the mapped alpha value of the current frames
+                # (if a foreground atlas pixel was ever used, set the mask to its alpha)
+                try:
+                    masks1[np.ceil(pointsy1).astype((np.int64)),
+                           np.ceil(pointsx1).astype((np.int64))] = np.maximum(
+                               masks1[np.ceil(pointsy1).astype((np.int64)),
+                                      np.ceil(pointsx1).astype((np.int64))],
+                               alpha.cpu().squeeze()[relevant1].numpy())
+                    masks1[np.floor(pointsy1).astype((np.int64)),
+                           np.floor(pointsx1).astype((np.int64))] = np.maximum(
+                               masks1[np.floor(pointsy1).astype((np.int64)),
+                                      np.floor(pointsx1).astype((np.int64))],
+                               alpha.cpu().squeeze()[relevant1].numpy())
+                    masks1[np.floor(pointsy1).astype((np.int64)),
+                           np.ceil(pointsx1).astype((np.int64))] = np.maximum(
+                               masks1[np.floor(pointsy1).astype((np.int64)),
+                                      np.ceil(pointsx1).astype((np.int64))],
+                               alpha.cpu().squeeze()[relevant1].numpy())
+                    masks1[np.ceil(pointsy1).astype((np.int64)),
+                           np.floor(pointsx1).astype((np.int64))] = np.maximum(
+                               masks1[np.ceil(pointsy1).astype((np.int64)),
+                                      np.floor(pointsx1).astype((np.int64))],
+                               alpha.cpu().squeeze()[relevant1].numpy())
 
-    #             # except Exception:
-    #             #     pass
+                except Exception:
+                    pass
 
-    #             # we show background pixels if they were ever used regardless of their alphas.
-    #             # try:
-    #             #     masks2[np.ceil(pointsy2).astype((np.int64)),
-    #             #            np.ceil(pointsx2).astype((np.int64))] = 1
-    #             #     masks2[np.floor(pointsy2).astype((np.int64)),
-    #             #            np.floor(pointsx2).astype((np.int64))] = 1
-    #             #     masks2[np.floor(pointsy2).astype((np.int64)),
-    #             #            np.ceil(pointsx2).astype((np.int64))] = 1
-    #             #     masks2[np.ceil(pointsy2).astype((np.int64)),
-    #             #            np.floor(pointsx2).astype((np.int64))] = 1
-    #             # except Exception:
-    #             #     pass
+                # we show background pixels if they were ever used regardless of their alphas.
+                try:
+                    masks2[np.ceil(pointsy2).astype((np.int64)),
+                           np.ceil(pointsx2).astype((np.int64))] = 1
+                    masks2[np.floor(pointsy2).astype((np.int64)),
+                           np.floor(pointsx2).astype((np.int64))] = 1
+                    masks2[np.floor(pointsy2).astype((np.int64)),
+                           np.ceil(pointsx2).astype((np.int64))] = 1
+                    masks2[np.ceil(pointsy2).astype((np.int64)),
+                           np.floor(pointsx2).astype((np.int64))] = 1
+                except Exception:
+                    pass
 
-    #             # video_frames_reconstruction_edit1[relisa[i][relevant1], reljsa[i][relevant1], :, f] = rgb21 * \
-    #             #     alpha.cpu().numpy()[
-    #             #     relevant1]
-    #             # video_frames_reconstruction_edit2[relisa[i][relevant2],
-    #             #                                   reljsa[i][relevant2], :,
-    #             #                                   f] = rgb22
-    #             # video_frames_reconstruction_edit[relisa[i][relevant1], reljsa[i][relevant1], :,
-    #             #                                  f] = video_frames_reconstruction_edit[relisa[i][relevant1], reljsa[i][relevant1], :, f] + rgb21 * \
-    #             #     alpha.cpu().numpy()[relevant1]
-    #             # video_frames_reconstruction_edit[relisa[i][relevant2], reljsa[i][relevant2], :,
-    #             #                                  f] = video_frames_reconstruction_edit[relisa[i][relevant2], reljsa[i][relevant2], :, f] + rgb22 * \
-    #             #     (1 - alpha).cpu().numpy()[relevant2]
+                # video_frames_reconstruction_edit1[relisa[i][relevant1], reljsa[i][relevant1], :, f] = rgb21 * \
+                #     alpha.cpu().numpy()[
+                #     relevant1]
+                # video_frames_reconstruction_edit2[relisa[i][relevant2],
+                #                                   reljsa[i][relevant2], :,
+                #                                   f] = rgb22
+                # video_frames_reconstruction_edit[relisa[i][relevant1], reljsa[i][relevant1], :,
+                #                                  f] = video_frames_reconstruction_edit[relisa[i][relevant1], reljsa[i][relevant1], :, f] + rgb21 * \
+                #     alpha.cpu().numpy()[relevant1]
+                # video_frames_reconstruction_edit[relisa[i][relevant2], reljsa[i][relevant2], :,
+                #                                  f] = video_frames_reconstruction_edit[relisa[i][relevant2], reljsa[i][relevant2], :, f] + rgb22 * \
+                #     (1 - alpha).cpu().numpy()[relevant2]
 
-    #             # video_frames_reconstruction[
-    #             #     relisa[i], reljsa[i], :,
-    #             #     f] = rgb_current.detach().cpu().numpy()
-    #             # alpha_reconstruction[relisa[i], reljsa[i],
-    #             #                      f] = alpha[:, 0].detach().cpu().numpy()
-    #             # flow_loss1_video[relisa[i], reljsa[i],
-    #             #                  f] = flow_loss1.cpu().numpy()
-    #             # flow_loss2_video[relisa[i], reljsa[i],
-    #             #                  f] = flow_loss2.cpu().numpy()
-    #             # flow_alpha_loss_video[
-    #             #     relisa[i], reljsa[i],
-    #             #     f] = flow_alpha_loss.cpu().squeeze().numpy()
-    #             # rigidity_loss1_video[relisa[i], reljsa[i],
-    #             #                      f] = rigidity_loss1.cpu().numpy()
-    #             # rigidity_loss2_video[relisa[i], reljsa[i],
-    #             #                      f] = rigidity_loss2.cpu().numpy()
-    #             # rgb_error_video[relisa[i], reljsa[i], f] = (
-    #             #     (video_frames[relisa[i], reljsa[i], :, f] -
-    #             #      rgb_current.cpu()).norm(dim=1)**2).numpy()
-    #             # rgb_residual_video[relisa[i], reljsa[i], :, f] = (
-    #             #     (video_frames[relisa[i], reljsa[i], :, f] -
-    #             #      rgb_current.cpu())).numpy()
-    #             # video_frames_reconstruction_edit1_checkerboard[
-    #             # relisa[i][relevant1_tex], reljsa[i][relevant1_tex], :,
-    #             # f] = video_frames_reconstruction_edit1_checkerboard[
-    #             #     relisa[i][relevant1_tex], reljsa[i][relevant1_tex], :,
-    #             #     f] * (1 - alpha).cpu().numpy(
-    #             #     )[relevant1_tex] + rgb21_tex * alpha.cpu().numpy(
-    #             #     )[relevant1_tex]
+                video_frames_reconstruction[
+                    relisa[i], reljsa[i], :,
+                    f] = rgb_current.detach().cpu().numpy()
+                # alpha_reconstruction[relisa[i], reljsa[i],
+                #                      f] = alpha[:, 0].detach().cpu().numpy()
+                # flow_loss1_video[relisa[i], reljsa[i],
+                #                  f] = flow_loss1.cpu().numpy()
+                # flow_loss2_video[relisa[i], reljsa[i],
+                #                  f] = flow_loss2.cpu().numpy()
+                # flow_alpha_loss_video[
+                #     relisa[i], reljsa[i],
+                #     f] = flow_alpha_loss.cpu().squeeze().numpy()
+                # rigidity_loss1_video[relisa[i], reljsa[i],
+                #                      f] = rigidity_loss1.cpu().numpy()
+                # rigidity_loss2_video[relisa[i], reljsa[i],
+                #                      f] = rigidity_loss2.cpu().numpy()
+                # rgb_error_video[relisa[i], reljsa[i], f] = (
+                #     (video_frames[relisa[i], reljsa[i], :, f] -
+                #      rgb_current.cpu()).norm(dim=1)**2).numpy()
+                # rgb_residual_video[relisa[i], reljsa[i], :, f] = (
+                #     (video_frames[relisa[i], reljsa[i], :, f] -
+                #      rgb_current.cpu())).numpy()
+                # video_frames_reconstruction_edit1_checkerboard[
+                # relisa[i][relevant1_tex], reljsa[i][relevant1_tex], :,
+                # f] = video_frames_reconstruction_edit1_checkerboard[
+                #     relisa[i][relevant1_tex], reljsa[i][relevant1_tex], :,
+                #     f] * (1 - alpha).cpu().numpy(
+                #     )[relevant1_tex] + rgb21_tex * alpha.cpu().numpy(
+                #     )[relevant1_tex]
 
-    #             # video_frames_reconstruction_edit2_checkerboard[
-    #             #     relisa[i][relevant2_tex], reljsa[i][relevant2_tex], :,
-    #             #     f] = rgb22_tex
-    # #         if show_atlas_alpha:  # this part is slow, not running during training
-    # #             cur_mask1 = interpolate_alpha(m1_alpha_v, m1_alpha_u,
-    # #                                           m1_alpha_alpha)
-    # #             cur_mask2 = interpolate_alpha(m2_alpha_v, m2_alpha_u,
-    # #                                           m2_alpha_alpha)
-    # #             all_masks1[:, :, f] = cur_mask1
-    # #             all_masks2[:, :, f] = cur_mask2
-    # # if show_atlas_alpha:  # this part is slow, not running during training
-    # #     all_masks1[np.isnan(all_masks1)] = 0
-    # #     all_masks2[np.isnan(all_masks2)] = 0
-    # #     masks1_alpha = np.nanmedian(all_masks1[:, :, :], axis=2)
-    # #     masks2_alpha = np.nanpercentile(all_masks2[:, :, :], 90, axis=2)
+                # video_frames_reconstruction_edit2_checkerboard[
+                #     relisa[i][relevant2_tex], reljsa[i][relevant2_tex], :,
+                #     f] = rgb22_tex
+            # if show_atlas_alpha:  # this part is slow, not running during training
+            #     cur_mask1 = interpolate_alpha(m1_alpha_v, m1_alpha_u,
+            #                                   m1_alpha_alpha)
+            #     cur_mask2 = interpolate_alpha(m2_alpha_v, m2_alpha_u,
+            #                                   m2_alpha_alpha)
+            #     all_masks1[:, :, f] = cur_mask1
+            #     all_masks2[:, :, f] = cur_mask2
+    # if show_atlas_alpha:  # this part is slow, not running during training
+    #     all_masks1[np.isnan(all_masks1)] = 0
+    #     all_masks2[np.isnan(all_masks2)] = 0
+    #     masks1_alpha = np.nanmedian(all_masks1[:, :, :], axis=2)
+    #     masks2_alpha = np.nanpercentile(all_masks2[:, :, :], 90, axis=2)
 
-    # # uvw1_frames_reconstruction = normalize_uvw_images(
-    # #     uvw1_frames_reconstruction, 0.5, edge_size, minx, miny, mind)
-    # # uvw2_frames_reconstruction = normalize_uvw_images(
-    # #     uvw2_frames_reconstruction, -0.5, edge_size2, minx2, miny2, mind2)
+    # uvw1_frames_reconstruction = normalize_uvw_images(
+    #     uvw1_frames_reconstruction, 0.5, edge_size, minx, miny, mind)
+    # uvw2_frames_reconstruction = normalize_uvw_images(
+    #     uvw2_frames_reconstruction, -0.5, edge_size2, minx2, miny2, mind2)
 
-    # Path(evaluation_folder).mkdir(parents=True, exist_ok=True)
-    # # mpimg.imsave("%s/texture_edit1.png" % (evaluation_folder),
-    # #              (masks1[:, :, np.newaxis] * edited_tex1.numpy() *
-    # #               (255)).astype(np.uint8))
-    # # mpimg.imsave("%s/texture_orig1.png" % (evaluation_folder),
-    # #              (masks1[:, :, np.newaxis] * texture_orig1.numpy() *
-    # #               (255)).astype(np.uint8))
+    Path(evaluation_folder).mkdir(parents=True, exist_ok=True)
+    # mpimg.imsave("%s/texture_edit1.png" % (evaluation_folder),
+    #              (masks1[:, :, np.newaxis] * edited_tex1.numpy() *
+    #               (255)).astype(np.uint8))
+    # mpimg.imsave("%s/texture_orig1.png" % (evaluation_folder),
+    #              (masks1[:, :, np.newaxis] * texture_orig1.numpy() *
+    #               (255)).astype(np.uint8))
 
-    # # mpimg.imsave("%s/texture_edit2.png" % (evaluation_folder),
-    # #              (masks2[:, :, np.newaxis] * edited_tex2.numpy() *
-    # #               (255)).astype(np.uint8))
-    # # if show_atlas_alpha:
-    # #     mpimg.imsave(
-    # #         "%s/texture_orig1_alpha.png" % (evaluation_folder),
-    # #         (np.concatenate(
-    # #             (texture_orig1.numpy(), masks1_alpha[:, :, np.newaxis]),
-    # #             axis=2) * (255)).astype(np.uint8))
-    # #     mpimg.imsave(
-    # #         "%s/texture_orig2_alpha.png" % (evaluation_folder),
-    # #         (np.concatenate(
-    # #             (texture_orig2.numpy(), masks2_alpha[:, :, np.newaxis]),
-    # #             axis=2) * (255)).astype(np.uint8))
+    # mpimg.imsave("%s/texture_edit2.png" % (evaluation_folder),
+    #              (masks2[:, :, np.newaxis] * edited_tex2.numpy() *
+    #               (255)).astype(np.uint8))
+    # if show_atlas_alpha:
+    #     mpimg.imsave(
+    #         "%s/texture_orig1_alpha.png" % (evaluation_folder),
+    #         (np.concatenate(
+    #             (texture_orig1.numpy(), masks1_alpha[:, :, np.newaxis]),
+    #             axis=2) * (255)).astype(np.uint8))
+    #     mpimg.imsave(
+    #         "%s/texture_orig2_alpha.png" % (evaluation_folder),
+    #         (np.concatenate(
+    #             (texture_orig2.numpy(), masks2_alpha[:, :, np.newaxis]),
+    #             axis=2) * (255)).astype(np.uint8))
 
-    # # mpimg.imsave("%s/texture_orig2.png" % (evaluation_folder),
-    # #              (masks2[:, :, np.newaxis] * texture_orig2.numpy() *
-    # #               (255)).astype(np.uint8))
+    # mpimg.imsave("%s/texture_orig2.png" % (evaluation_folder),
+    #              (masks2[:, :, np.newaxis] * texture_orig2.numpy() *
+    #               (255)).astype(np.uint8))
 
-    # # writer_t_edited1 = imageio.get_writer("%s/edited1_%s.mp4" % (evaluation_folder, vid_name), fps=10)
-    # # writer_t_edited1_tex = imageio.get_writer("%s/edited1_tex_%s.mp4" %
-    # #                                           (evaluation_folder, vid_name),
-    # #                                           fps=10)
-    # # writer_t_edited2_tex = imageio.get_writer("%s/edited2_tex_%s.mp4" %
-    # #                                           (evaluation_folder, vid_name),
-    # #                                           fps=10)
+    # writer_t_edited1 = imageio.get_writer("%s/edited1_%s.mp4" % (evaluation_folder, vid_name), fps=10)
+    # writer_t_edited1_tex = imageio.get_writer("%s/edited1_tex_%s.mp4" %
+    #                                           (evaluation_folder, vid_name),
+    #                                           fps=10)
+    # writer_t_edited2_tex = imageio.get_writer("%s/edited2_tex_%s.mp4" %
+    #                                           (evaluation_folder, vid_name),
+    #                                           fps=10)
 
-    # # writer_t_edited2 = imageio.get_writer("%s/edited2_%s.mp4" %
-    # #                                       (evaluation_folder, vid_name),
-    # #                                       fps=10)
-    # # writer_alpha = imageio.get_writer("%s/alpha_%s.mp4" %
-    # #                                   (evaluation_folder, vid_name),
-    # #                                   fps=10)
+    # writer_t_edited2 = imageio.get_writer("%s/edited2_%s.mp4" %
+    #                                       (evaluation_folder, vid_name),
+    #                                       fps=10)
+    # writer_alpha = imageio.get_writer("%s/alpha_%s.mp4" %
+    #                                   (evaluation_folder, vid_name),
+    #                                   fps=10)
 
-    # # writer_im_rec = imageio.get_writer(f"{evaluation_folder}/reconstruction_{vid_name}.mp4",
-    # #                                    fps=10)
+    writer_im_rec = imageio.get_writer(
+        f"{evaluation_folder}/reconstruction_{vid_name}.mp4", fps=10)
 
-    # # writer_residuals = imageio.get_writer("%s/residuals_%s.mp4" %
-    # #                                       (evaluation_folder, vid_name),
-    # #                                       fps=10)
+    # writer_residuals = imageio.get_writer("%s/residuals_%s.mp4" %
+    #                                       (evaluation_folder, vid_name),
+    #                                       fps=10)
 
-    # # writer_alpha_vs_mask_rcnn = imageio.get_writer(
-    # #     "%s/alpha_vs_mask_rcnn_%s.mp4" % (evaluation_folder, vid_name), fps=10)
+    # writer_alpha_vs_mask_rcnn = imageio.get_writer(
+    #     "%s/alpha_vs_mask_rcnn_%s.mp4" % (evaluation_folder, vid_name), fps=10)
 
-    # # writer_edit = imageio.get_writer("%s/edit_%s.mp4" %
-    # #                                  (evaluation_folder, vid_name),
-    # #                                  fps=10)
+    # writer_edit = imageio.get_writer("%s/edit_%s.mp4" %
+    #                                  (evaluation_folder, vid_name),
+    #                                  fps=10)
 
-    # # writer_uv_1 = imageio.get_writer("%s/uv_1_%s.mp4" %
-    # #                                  (evaluation_folder, vid_name),
-    # #                                  fps=10)
+    # writer_uv_1 = imageio.get_writer("%s/uv_1_%s.mp4" %
+    #                                  (evaluation_folder, vid_name),
+    #                                  fps=10)
 
-    # # writer_uv_1_masked = imageio.get_writer("%s/uv_1_masked_%s.mp4" %
-    # #                                         (evaluation_folder, vid_name),
-    # #                                         fps=10)
+    # writer_uv_1_masked = imageio.get_writer("%s/uv_1_masked_%s.mp4" %
+    #                                         (evaluation_folder, vid_name),
+    #                                         fps=10)
 
-    # # writer_uv_2 = imageio.get_writer("%s/uv_2_%s.mp4" %
-    # #                                  (evaluation_folder, vid_name),
-    # #                                  fps=10)
-    # # writer_checkerboard_1 = imageio.get_writer("%s/checkerboard_1_%s.mp4" %
-    # #                                            (evaluation_folder, vid_name),
-    # #                                            fps=10)
-    # # writer_checkerboard_2 = imageio.get_writer("%s/checkerboard_2_%s.mp4" %
-    # #                                            (evaluation_folder, vid_name),
-    # #                                            fps=10)
+    # writer_uv_2 = imageio.get_writer("%s/uv_2_%s.mp4" %
+    #                                  (evaluation_folder, vid_name),
+    #                                  fps=10)
+    # writer_checkerboard_1 = imageio.get_writer("%s/checkerboard_1_%s.mp4" %
+    #                                            (evaluation_folder, vid_name),
+    #                                            fps=10)
+    # writer_checkerboard_2 = imageio.get_writer("%s/checkerboard_2_%s.mp4" %
+    #                                            (evaluation_folder, vid_name),
+    #                                            fps=10)
 
-    # # writer_global_info = imageio.get_writer("%s/global_info_%s.mp4" %
-    # #                                         (evaluation_folder, vid_name),
-    # #                                         fps=10)
+    # writer_global_info = imageio.get_writer("%s/global_info_%s.mp4" %
+    #                                         (evaluation_folder, vid_name),
+    #                                         fps=10)
 
-    # # pnsrs = np.zeros((number_of_frames, 1))
-    # # # save evaluation videos:
-    # # for i in range(number_of_frames):
-    # #     print(i)
+    # pnsrs = np.zeros((number_of_frames, 1))
+    # save evaluation videos:
+    for i in range(number_of_frames):
+        print(i)
 
-    # #     cur = (video_frames_reconstruction_edit1[:, :, :, i])
-    # #     cc = np.concatenate(
-    # #         (cur,
-    # #          cv2.resize(masks1[:, :, np.newaxis] * edited_tex1.numpy(),
-    # #                     (cur.shape[0], cur.shape[0]))),
-    # #         axis=1)
-    # #     writer_t_edited1.append_data((cc * (255)).astype(np.uint8))
+        # cur = (video_frames_reconstruction_edit1[:, :, :, i])
+        # cc = np.concatenate(
+        #     (cur,
+        #      cv2.resize(masks1[:, :, np.newaxis] * edited_tex1.numpy(),
+        #                 (cur.shape[0], cur.shape[0]))),
+        #     axis=1)
+        # writer_t_edited1.append_data((cc * (255)).astype(np.uint8))
 
-    # #     cur = (video_frames_reconstruction_edit1_checkerboard[:, :, :, i])
-    # #     cc = np.concatenate(
-    # #         (cur, cv2.resize(checkerboard.numpy(),
-    # #                          (cur.shape[0], cur.shape[0]))),
-    # #         axis=1)
-    # #     writer_t_edited1_tex.append_data((cc * (255)).astype(np.uint8))
-    # #     writer_checkerboard_1.append_data((cur * 255).astype(np.uint8))
+        # cur = (video_frames_reconstruction_edit1_checkerboard[:, :, :, i])
+        # cc = np.concatenate(
+        #     (cur, cv2.resize(checkerboard.numpy(),
+        #                      (cur.shape[0], cur.shape[0]))),
+        # axis=1)
+        # writer_t_edited1_tex.append_data((cc * (255)).astype(np.uint8))
+        # writer_checkerboard_1.append_data((cur * 255).astype(np.uint8))
 
-    # #     cur = (video_frames_reconstruction_edit2_checkerboard[:, :, :, i])
-    # #     cc = np.concatenate((cur,
-    # #                          cv2.resize(checkerboard2.numpy(),
-    # #                                     (cur.shape[0], cur.shape[0]))),
-    # #                         axis=1)
-    # #     writer_t_edited2_tex.append_data((cc * (255)).astype(np.uint8))
-    # #     writer_checkerboard_2.append_data((cur * 255).astype(np.uint8))
+        # cur = (video_frames_reconstruction_edit2_checkerboard[:, :, :, i])
+        # cc = np.concatenate((cur,
+        #                      cv2.resize(checkerboard2.numpy(),
+        #                                 (cur.shape[0], cur.shape[0]))),
+        #                     axis=1)
+        # writer_t_edited2_tex.append_data((cc * (255)).astype(np.uint8))
+        # writer_checkerboard_2.append_data((cur * 255).astype(np.uint8))
 
-    # #     writer_alpha.append_data(
-    # #         (alpha_reconstruction[:, :, i] * (255)).astype(np.uint8))
+        # writer_alpha.append_data(
+        #     (alpha_reconstruction[:, :, i] * (255)).astype(np.uint8))
 
-    # #     cur = (video_frames_reconstruction_edit2[:, :, :, i])
-    # #     cc = np.concatenate(
-    # #         (cur,
-    # #          cv2.resize(masks2[:, :, np.newaxis] * edited_tex2.numpy(),
-    # #                     (cur.shape[0], cur.shape[0]))),
-    # #         axis=1)
-    # #     writer_t_edited2.append_data((cc * (255)).astype(np.uint8))
+        # cur = (video_frames_reconstruction_edit2[:, :, :, i])
+        # cc = np.concatenate(
+        #     (cur,
+        #      cv2.resize(masks2[:, :, np.newaxis] * edited_tex2.numpy(),
+        #                 (cur.shape[0], cur.shape[0]))),
+        #     axis=1)
+        # writer_t_edited2.append_data((cc * (255)).astype(np.uint8))
 
-    # #     alpha_vs_mask_rcnn_cur = np.transpose(
-    # #         np.stack((mask_frames[:, :, i].numpy(), alpha_reconstruction[:, :,
-    # #                                                                      i],
-    # #                   np.zeros_like(mask_frames[:, :, i].numpy()))), (1, 2, 0))
+        # alpha_vs_mask_rcnn_cur = np.transpose(
+        #     np.stack((mask_frames[:, :, i].numpy(), alpha_reconstruction[:, :,
+        #                                                                  i],
+        #               np.zeros_like(mask_frames[:, :, i].numpy()))), (1, 2, 0))
 
-    # #     writer_alpha_vs_mask_rcnn.append_data(
-    # #         (alpha_vs_mask_rcnn_cur * 255.0).astype(np.uint8))
-    # #     writer_edit.append_data((video_frames_reconstruction_edit[:, :, :, i] *
-    # #                              (255)).astype(np.uint8))
-    # #     writer_im_rec.append_data(
-    # #         (video_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
-    # #     writer_residuals.append_data(
-    # #         ((rgb_residual_video[:, :, :, i] + 0.5) * 255).astype(np.uint8))
+        # writer_alpha_vs_mask_rcnn.append_data(
+        #     (alpha_vs_mask_rcnn_cur * 255.0).astype(np.uint8))
+        # writer_edit.append_data((video_frames_reconstruction_edit[:, :, :, i] *
+        #                          (255)).astype(np.uint8))
+        writer_im_rec.append_data(
+            (video_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
+        # writer_residuals.append_data(
+        #     ((rgb_residual_video[:, :, :, i] + 0.5) * 255).astype(np.uint8))
 
-    # #     writer_uv_1.append_data(
-    # #         (uvw1_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
-    # #     writer_uv_2.append_data(
-    # #         (uvw2_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
-    # #     writer_uv_1_masked.append_data(
-    # #         (uvw1_frames_reconstruction[:, :, :, i] *
-    # #          alpha_reconstruction[:, :, i][:, :, np.newaxis] * (255)).astype(
-    # #              np.uint8))
+        # writer_uv_1.append_data(
+        #     (uvw1_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
+        # writer_uv_2.append_data(
+        #     (uvw2_frames_reconstruction[:, :, :, i] * (255)).astype(np.uint8))
+        # writer_uv_1_masked.append_data(
+        #     (uvw1_frames_reconstruction[:, :, :, i] *
+        #      alpha_reconstruction[:, :, i][:, :, np.newaxis] * (255)).astype(
+        #          np.uint8))
 
-    # #     pnsrs[i] = skimage.metrics.peak_signal_noise_ratio(
-    # #         video_frames[:, :, :, i].numpy(),
-    # #         video_frames_reconstruction[:, :, :, i],
-    # #         data_range=1)
+        # pnsrs[i] = skimage.metrics.peak_signal_noise_ratio(
+        #     video_frames[:, :, :, i].numpy(),
+        #     video_frames_reconstruction[:, :, :, i],
+        #     data_range=1)
 
-    # #     fig = plt.figure(figsize=(20, 10))
-    # #     plt.subplot(3, 4, 3)
-    # #     plt.imshow(rgb_error_video[:, :, i], vmin=0.0, vmax=0.2)
-    # #     plt.colorbar()
-    # #     plt.title("RGB error")
+        fig = plt.figure(figsize=(20, 10))
+        # plt.subplot(3, 4, 3)
+        # plt.imshow(rgb_error_video[:, :, i], vmin=0.0, vmax=0.2)
+        # plt.colorbar()
+        # plt.title("RGB error")
 
-    # #     plt.subplot(3, 4, 12)
-    # #     plt.imshow(rigidity_loss1_video[:, :, i], vmin=2.8, vmax=50.0)
-    # #     plt.colorbar()
-    # #     plt.title("rigidity_loss1")
+        # plt.subplot(3, 4, 12)
+        # plt.imshow(rigidity_loss1_video[:, :, i], vmin=2.8, vmax=50.0)
+        # plt.colorbar()
+        # plt.title("rigidity_loss1")
 
-    # #     plt.subplot(3, 4, 7)
-    # #     plt.imshow(flow_alpha_loss_video[:, :, i], vmin=0, vmax=1)
-    # #     plt.colorbar()
-    # #     plt.title("flow_alpha_loss")
+        # plt.subplot(3, 4, 7)
+        # plt.imshow(flow_alpha_loss_video[:, :, i], vmin=0, vmax=1)
+        # plt.colorbar()
+        # plt.title("flow_alpha_loss")
 
-    # #     plt.subplot(3, 4, 11)
-    # #     plt.imshow(rigidity_loss2_video[:, :, i], vmin=2.8, vmax=50.0)
-    # #     plt.colorbar()
-    # #     plt.title("rigidity_loss2")
+        # plt.subplot(3, 4, 11)
+        # plt.imshow(rigidity_loss2_video[:, :, i], vmin=2.8, vmax=50.0)
+        # plt.colorbar()
+        # plt.title("rigidity_loss2")
 
-    # #     plt.subplot(3, 4, 9)
-    # #     plt.imshow(flow_loss1_video[:, :, i], vmin=0.0, vmax=2.0)
-    # #     plt.colorbar()
-    # #     plt.title("flow_loss1")
+        # plt.subplot(3, 4, 9)
+        # plt.imshow(flow_loss1_video[:, :, i], vmin=0.0, vmax=2.0)
+        # plt.colorbar()
+        # plt.title("flow_loss1")
 
-    # #     plt.subplot(3, 4, 10)
-    # #     plt.imshow(flow_loss2_video[:, :, i], vmin=0.0, vmax=2.0)
-    # #     plt.colorbar()
-    # #     plt.title("flow_loss2")
+        # plt.subplot(3, 4, 10)
+        # plt.imshow(flow_loss2_video[:, :, i], vmin=0.0, vmax=2.0)
+        # plt.colorbar()
+        # plt.title("flow_loss2")
 
-    # #     plt.subplot(3, 4, 5)
-    # #     plt.imshow(alpha_reconstruction[:, :, i], vmin=0.0, vmax=1.0)
-    # #     plt.colorbar()
-    # #     plt.title("alpha")
-    # #     plt.subplot(3, 4, 6)
-    # #     plt.imshow(alpha_vs_mask_rcnn_cur, vmin=0.0, vmax=1.0)
-    # #     plt.colorbar()
-    # #     plt.title("alpha_vs_mask_rcnn")
+        # plt.subplot(3, 4, 5)
+        # plt.imshow(alpha_reconstruction[:, :, i], vmin=0.0, vmax=1.0)
+        # plt.colorbar()
+        # plt.title("alpha")
+        # plt.subplot(3, 4, 6)
+        # plt.imshow(alpha_vs_mask_rcnn_cur, vmin=0.0, vmax=1.0)
+        # plt.colorbar()
+        # plt.title("alpha_vs_mask_rcnn")
 
-    # #     plt.subplot(3, 4, 1)
-    # #     plt.imshow(video_frames_reconstruction[:, :, :, i], vmin=0.0, vmax=1.0)
-    # #     plt.colorbar()
-    # #     plt.title("video_reconstruction")
+        plt.subplot(3, 4, 1)
+        plt.imshow(video_frames_reconstruction[:, :, :, i], vmin=0.0, vmax=1.0)
+        plt.colorbar()
+        plt.title("video_reconstruction")
 
-    # #     plt.subplot(3, 4, 2)
-    # #     plt.imshow(video_frames[:, :, :, i].numpy(), vmin=0.0, vmax=1.0)
-    # #     plt.colorbar()
-    # #     plt.title("original_video")
+        plt.subplot(3, 4, 2)
+        plt.imshow(video_frames[:, :, :, i].numpy(), vmin=0.0, vmax=1.0)
+        plt.colorbar()
+        plt.title("original_video")
 
-    # #     imm = get_img_from_fig(fig)
-    # #     writer_global_info.append_data(imm)
-    # #     plt.close(fig)
+        # imm = get_img_from_fig(fig)
+        # writer_global_info.append_data(imm)
+        plt.close(fig)
 
-    # # print(pnsrs.mean())
-    # # writer_t_edited2_tex.close()
-    # # writer_t_edited1_tex.close()
-    # # writer_t_edited1.close()
-    # # writer_t_edited2.close()
-    # # writer_im_rec.close()
-    # # writer_alpha.close()
-    # # writer_alpha_vs_mask_rcnn.close()
-    # # writer_global_info.close()
-    # # writer_residuals.close()
-    # # writer_edit.close()
-    # # writer_uv_1.close()
-    # # writer_uv_2.close()
-    # # writer_checkerboard_1.close()
-    # # writer_checkerboard_2.close()
-    # # writer_uv_1_masked.close()
+    # print(pnsrs.mean())
+    # writer_t_edited2_tex.close()
+    # writer_t_edited1_tex.close()
+    # writer_t_edited1.close()
+    # writer_t_edited2.close()
+    writer_im_rec.close()
+    # writer_alpha.close()
+    # writer_alpha_vs_mask_rcnn.close()
+    # writer_global_info.close()
+    # writer_residuals.close()
+    # writer_edit.close()
+    # writer_uv_1.close()
+    # writer_uv_2.close()
+    # writer_checkerboard_1.close()
+    # writer_checkerboard_2.close()
+    # writer_uv_1_masked.close()
 
-    # # # save the psnr result as the name of a dummy file
-    # # file1 = open('%s/%06d/PSNR_%f' % (results_folder, iteration, pnsrs.mean()),
-    # #              "a")
-    # # file1.close()
-    # # if save_checkpoint:
-    # #     writer.add_image("Train/atlas1",
-    # #                      masks1[:, :, np.newaxis] * texture_orig1.numpy(),
-    # #                      iteration,
-    # #                      dataformats='HWC')
-    # #     writer.add_image("Train/atlas2",
-    # #                      masks2[:, :, np.newaxis] * texture_orig2.numpy(),
-    # #                      iteration,
-    # #                      dataformats='HWC')
-    # #     writer.add_image("Train/recon_frame_0",
-    # #                      video_frames_reconstruction[:, :, :, 0],
-    # #                      iteration,
-    # #                      dataformats='HWC')
-    # #     writer.add_image("Train/recon_frame_end",
-    # #                      video_frames_reconstruction[:, :, :, -1],
-    # #                      iteration,
-    # #                      dataformats='HWC')
+    # save the psnr result as the name of a dummy file
+    # file1 = open('%s/%06d/PSNR_%f' % (results_folder, iteration, pnsrs.mean()),
+    #              "a")
+    # file1.close()
+    if save_checkpoint:
+        writer.add_image("Train/atlas1",
+                         masks1[:, :, np.newaxis] * texture_orig1.numpy(),
+                         iteration,
+                         dataformats='HWC')
+        writer.add_image("Train/atlas2",
+                         masks2[:, :, np.newaxis] * texture_orig2.numpy(),
+                         iteration,
+                         dataformats='HWC')
+        writer.add_image("Train/recon_frame_0",
+                         video_frames_reconstruction[:, :, :, 0],
+                         iteration,
+                         dataformats='HWC')
+        writer.add_image("Train/recon_frame_end",
+                         video_frames_reconstruction[:, :, :, -1],
+                         iteration,
+                         dataformats='HWC')
 
-    # # return alpha_reconstruction
+    # return alpha_reconstruction
 
     return None

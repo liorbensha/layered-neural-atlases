@@ -9,12 +9,13 @@ import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
+from depth_integration_utils import CoordinatesWithDepth
 from evaluate import evaluate_model
 from implicit_neural_networks import IMLP
 from loss_utils import (get_gradient_loss, get_optical_flow_alpha_loss,
                         get_optical_flow_loss, get_rigidity_loss)
-from unwrap_utils import (get_tuples, load_input_data, pre_train_mapping,
-                          save_mask_flow)
+from unwrap_utils import (get_tuples, load_cameras_parameters, load_input_data,
+                          pre_train_mapping, save_mask_flow)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -123,11 +124,13 @@ def main(config):
     writer = SummaryWriter(log_dir=str(results_folder))
     optical_flows_mask, video_frames, optical_flows_reverse_mask, mask_frames, video_frames_dx, \
         video_frames_dy, optical_flows_reverse, optical_flows, depth_frames = load_input_data(
-            resy, resx, maximum_number_of_frames, data_folder, True, True, vid_root, vid_name)
+            resy, resx, maximum_number_of_frames, data_folder, True, True, vid_root, vid_name) # TODO (Yakir): this loads and computes dx, dy... object should get loaded data and compute.
     number_of_frames = video_frames.shape[3]
     # save a video showing the masked part of the forward optical flow:s
     save_mask_flow(optical_flows_mask, video_frames, results_folder)
-
+    camera_parameters = load_cameras_parameters()
+    depth_provider = CoordinatesWithDepth(video_frames, depth_frames,
+                                          camera_parameters)
     model_F_mapping1 = IMLP(
         input_dim=4,
         output_dim=3,
@@ -208,8 +211,9 @@ def main(config):
         optimizer_all.load_state_dict(init_file["optimizer_all_state_dict"])
         start_iteration = init_file["iteration"]
 
-    jif_all, depth_at_jif = get_tuples(number_of_frames, video_frames,
-                                       depth_frames)
+    jif_all, depth_at_jif = get_tuples(
+        number_of_frames, video_frames,
+        depth_frames)  # maybe here return the undistorted points?
 
     # Start training!
     for i in range(start_iteration, iters_num):
@@ -237,11 +241,10 @@ def main(config):
             0, :], jif_current[2, :]].squeeze(1).to(device).unsqueeze(-1)
 
         # normalize coordinates to be in [-1,1]
-        # TODO: (Lior) added 3rd coordinate - already in [-1, 1]
         xydt_current = torch.cat(
             (jif_current[0, :] / (larger_dim / 2) - 1, jif_current[1, :] /
-             (larger_dim / 2) - 1, depth_at_jif_current, jif_current[2, :] /
-             (number_of_frames / 2.0) - 1),
+             (larger_dim / 2) - 1, depth_at_jif_current / (larger_dim / 2) - 1,
+             jif_current[2, :] / (number_of_frames / 2.0) - 1),
             dim=1).to(device)  # size (batch, 4)
 
         # get the atlas UVW coordinates from the two mapping networks;
@@ -266,8 +269,10 @@ def main(config):
             gradient_loss = get_gradient_loss(
                 video_frames_dx, video_frames_dy, jif_current,
                 depth_at_jif_current, model_F_mapping1, model_F_mapping2,
-                model_F_atlas, rgb_output_foreground, device, resx,
-                number_of_frames, model_alpha)
+                model_F_atlas, rgb_output_foreground, device, larger_dim,
+                number_of_frames, model_alpha
+            )  # TODO (Yakir): they are assuming resx is max here? -
+            # changed to `larger_dim` for now. All other instances use `larger_dim` (from original code)
         else:
             gradient_loss = 0.0
         print("gradient_loss:")
